@@ -1,5 +1,5 @@
 # ExcelSearch Database Schema
-Version: 1.10 | Last Updated: 2026-10-09
+Version: 1.30 | Last Updated: 2026-10-09
 Database: ExcelSearch
 Server: LOCAL
 
@@ -14,6 +14,7 @@ Source of truth for the structure: `Scripts/db/001_create_tables.sql` (re-runnab
 
 ## Relationships
 - `Transactions.ImportBatchId` → `ImportBatches.Id` (`FK_Transactions_ImportBatches`, no cascade)
+- `ImportStaging.ImportBatchId` → `ImportBatches.Id` (`FK_ImportStaging_ImportBatches`, no cascade)
 
 ## Table: dbo.ImportBatches
 One row per imported Excel file (audit trail and row counts).
@@ -33,7 +34,15 @@ One row per imported Excel file (audit trail and row counts).
 | UpdatedRows | int | NOT NULL | 0 | Conflicts (same key, different RowHash) the user chose to overwrite. |
 | RejectedRows | int | NOT NULL | 0 | Invalid rows that were not imported. |
 
-Indexes: `PK_ImportBatches` (clustered, Id); `IX_ImportBatches_FileHash` (FileHash).
+| Status | varchar(20) | NOT NULL | 'Committed' | `Staged` / `Committed` / `Discarded` (`CK_ImportBatches_Status`). Added 2026-10-09. |
+| CommittedAt | datetime2(0) | NULL | | UTC time the batch was committed. Added 2026-10-09. |
+| ImportedBy | nvarchar(256) | NULL | | Windows user (DOMAIN\user) who created the batch. NULL for batches that predate it. Added 2026-10-09. |
+
+- 2026-10-09: `Status` and `CommittedAt` added by `002_create_staging.sql` for the staging design (files can exceed 100k rows). Rows that existed before default to `Committed`.
+
+- 2026-10-09: `ImportedBy` added by `003_concurrency.sql` so several users can import at once: lists "my imports" and lets cleanup act on one user's batches.
+
+Indexes: `PK_ImportBatches` (clustered, Id); `IX_ImportBatches_FileHash` (FileHash); `IX_ImportBatches_Status_ImportedAt` (Status, ImportedAt) for finding stale 'Staged' batches.
 
 ## Table: dbo.Transactions
 One row per Excel data row.
@@ -93,7 +102,29 @@ Indexes
 - `UQ_Transactions_Id` — unique, (Id).
 - Non-unique, for the filter screen: `IX_Transactions_TxnRefSeqNo` (TxnRefSeqNo), `IX_Transactions_ValueDate` (ValueDate), `IX_Transactions_Bank_Account` (BankName, AccountNo), `IX_Transactions_Project` (Project), `IX_Transactions_DealerName` (DealerName), `IX_Transactions_CustomerName` (CustomerName), `IX_Transactions_Cnic` (Cnic), `IX_Transactions_ApplicationNo` (ApplicationNo), `IX_Transactions_ChallanNo` (ChallanNo), `IX_Transactions_ImportBatchId` (ImportBatchId).
 
+## Table: dbo.ImportStaging
+Every parsed Excel row of a not-yet-committed batch (valid and invalid), so large files are classified in SQL instead of in memory.
+
+- 2026-10-09: Created by `002_create_staging.sql`. The app bulk-loads a batch, SQL classifies rows set-based, the preview pages through them by Status, and commit/discard deletes the batch's staging rows.
+- 2026-10-09: All data columns are NULLable because invalid rows may lack anything; the parser truncates over-long values to these sizes so a staging insert cannot fail on length. Types and sizes otherwise match `Transactions`.
+- 2026-10-09: `ErrorText` is nvarchar(2000): the app must cap the joined error text to that length.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| ImportBatchId | int | NOT NULL | | PK part 1. FK → ImportBatches.Id. |
+| ExcelRowNumber | int | NOT NULL | | PK part 2. 1-based row in the source sheet. |
+| Status | tinyint | NOT NULL | 0 | 0 Pending, 1 Invalid, 2 New, 3 ExactDuplicate, 4 FileDuplicate, 5 Conflict. |
+| Overwrite | bit | NOT NULL | 0 | User's choice for Conflict rows. |
+| ErrorText | nvarchar(2000) | NULL | | Validation errors for the row, joined. |
+| RowHash | char(64) | NULL | | SHA-256 hex; NULL when the row failed validation while parsing. |
+| ExistingRowHash | char(64) | NULL | | For Conflict rows: RowHash of the matching `Transactions` row at classification time. Commit compares it with the current hash and aborts if the row changed since the preview. Added 2026-10-09. |
+| PayOrderNo … Narration5 | as in Transactions | NULL | | Same names, types and sizes as the `Transactions` business columns (ValueDate is date). |
+
+Indexes: `PK_ImportStaging` (clustered, ImportBatchId + ExcelRowNumber); `IX_ImportStaging_Key` (ImportBatchId, PayOrderNo, TxnRefSeqNo); `IX_ImportStaging_Status` (ImportBatchId, Status, ExcelRowNumber).
+
 ## Change History
 - 2026-10-08: Script `001_create_tables.sql` run against the local `ExcelSearch` database; created `dbo.ImportBatches` (10 columns) and `dbo.Transactions` (34 columns) with all keys and indexes above. Verified that the PK is (PayOrderNo, TxnRefSeqNo) and that a duplicate key insert fails with error 2627.
 - 2026-10-08: Ran `DBCC CHECKIDENT ('dbo.ImportBatches', RESEED, 0)` while the table was empty, so the first real batch gets Id 1. A rolled-back test insert during verification had consumed identity value 1. No data change.
 - 2026-10-09: This file expanded from the empty template to document both tables, relationships, indexes and history. Introspected from the live database; structure matches the script exactly. Both tables currently hold 0 rows.
+- 2026-10-09: Ran `002_create_staging.sql`: added `ImportBatches.Status` / `CommittedAt` and created `dbo.ImportStaging` with its keys and indexes. Verified in a rolled-back transaction that a second staging row with the same (ImportBatchId, ExcelRowNumber) fails with error 2627. Re-seeded `ImportBatches` identity to 0 afterwards (the test consumed value 1). Both tables hold 0 rows.
+- 2026-10-09: Ran `003_concurrency.sql`: added `ImportBatches.ImportedBy`, `ImportStaging.ExistingRowHash` and `IX_ImportBatches_Status_ImportedAt`. `READ_COMMITTED_SNAPSHOT` deliberately left OFF (the optional line in the script stays commented). No identity reseed. Integration tests run against this same database using unique `TEST_`-prefixed keys and delete only their own rows (batch ids are consumed, so Ids have gaps). A temporary `ExcelSearch_Test` database was created and dropped the same day.
