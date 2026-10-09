@@ -58,4 +58,14 @@ public sealed class ImportPreviewService
             throw;
         }
     }
+
+    /// <summary>Sets the Overwrite flag on Conflict rows (null row numbers = all of them).</summary>
+    public Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite, IReadOnlyCollection<int>? excelRowNumbers = null,
+        CancellationToken ct = default) => _store.SetConflictOverwriteAsync(batchId, overwrite, excelRowNumbers, ct);
+
+    /// <summary>Commits a staged batch into Transactions.</summary>
+    public Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default) => _store.CommitAsync(batchId, ct);
+
+    /// <summary>Removes abandoned batches and leftover staging rows; safe to run at any time.</summary>
+    public Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default) => _store.CleanupStaleBatchesAsync(ct);
 }

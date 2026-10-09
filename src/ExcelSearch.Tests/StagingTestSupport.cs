@@ -128,6 +128,38 @@ internal sealed class StagingEnv : IAsyncDisposable
         return await db.ImportBatches.Where(b => b.Id == batchId).Select(b => b.Status).SingleOrDefaultAsync();
     }
 
+    public async Task<ExcelSearch.Data.Entities.Transaction?> GetTransactionAsync(string po, string tx)
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        return await db.Transactions.AsNoTracking().SingleOrDefaultAsync(t => t.PayOrderNo == po && t.TxnRefSeqNo == tx);
+    }
+
+    public async Task<int> StagingCountAsync(int batchId)
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        return await db.ImportStagings.CountAsync(s => s.ImportBatchId == batchId);
+    }
+
+    public async Task<ExcelSearch.Data.Entities.ImportBatch> GetBatchAsync(int batchId)
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        return await db.ImportBatches.AsNoTracking().SingleAsync(b => b.Id == batchId);
+    }
+
+    /// <summary>Runs one UPDATE/other statement that a test needs to simulate something (always scoped by the caller).</summary>
+    public async Task ExecuteAsync(FormattableString sql)
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync(sql);
+    }
+
+    public async Task<int> CountTransactionsWithPrefixAsync()
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        var pattern = Prefix.Replace("_", "[_]") + "%";
+        return await db.Database.SqlQuery<int>($"SELECT COUNT(*) AS Value FROM dbo.Transactions WHERE PayOrderNo LIKE {pattern}").SingleAsync();
+    }
+
     /// <summary>Builds a valid row with a real RowHash; <paramref name="debit"/> is what makes two rows differ.</summary>
     public static ImportRow Row(int excelRow, string po, string tx, decimal debit = 0m, bool invalid = false)
     {
@@ -175,10 +207,15 @@ internal sealed class StagingEnv : IAsyncDisposable
             } while (n > 0);
         }
 
-        // 2. Transactions rows this test seeded: its own batches AND keys carrying its unique prefix
-        await db.Transactions
-            .Where(t => ids.Contains(t.ImportBatchId) && t.PayOrderNo.StartsWith(prefix))
-            .ExecuteDeleteAsync();
+        // 2. Transactions rows whose keys carry this test's unique prefix (in chunks: the large test commits 200,000).
+        //    LIKE 'TEST[_]<guid>%' is a prefix match on the clustered key, with the underscore escaped.
+        var pattern = prefix.Replace("_", "[_]") + "%";
+        int n2;
+        do
+        {
+            n2 = await db.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE TOP (50000) FROM dbo.Transactions WHERE PayOrderNo LIKE {pattern}");
+        } while (n2 > 0);
 
         // 3. the batches themselves
         await db.ImportBatches.Where(b => ids.Contains(b.Id)).ExecuteDeleteAsync();

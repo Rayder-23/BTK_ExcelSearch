@@ -83,4 +83,23 @@ public interface IStagingStore
 
     /// <summary>Deletes the batch's staging rows (in chunks) and marks the batch 'Discarded'. Never touches Transactions.</summary>
     Task DiscardAsync(int batchId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Marks Conflict rows (status 5) of this batch to be overwritten (or not) on commit. A null
+    /// <paramref name="excelRowNumbers"/> means every Conflict row. Returns how many rows were set.
+    /// </summary>
+    Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite, IReadOnlyCollection<int>? excelRowNumbers,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Writes the batch into Transactions in one transaction, under an exclusive application lock so two
+    /// commits never run at once. Expected failures are returned in the result, not thrown.
+    /// </summary>
+    Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Housekeeping: discards 'Staged' batches older than 24 hours, and deletes leftover staging rows of
+    /// 'Committed'/'Discarded' batches. A recent 'Staged' batch (someone may be working on it) is never touched.
+    /// </summary>
+    Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default);
 }
