@@ -2,7 +2,9 @@ using System.Diagnostics;
 using ExcelSearch.Core.Import;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Data.Entities;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace ExcelSearch.Data;
 
@@ -11,9 +13,10 @@ namespace ExcelSearch.Data;
 /// a re-scaffold. Every statement filters on ImportBatchId, so concurrent batches never touch each other.
 /// A fresh short-lived context is created per operation/chunk from the factory; nothing is kept between calls.
 /// </summary>
-public sealed class SqlServerStagingStore : IStagingStore
+public sealed partial class SqlServerStagingStore : IStagingStore
 {
-    private const int ChunkSize = 5_000;
+    private const int BulkBatchSize = 10_000;
+    private const int ProgressEvery = 5_000;
     private const int DeleteChunk = 50_000;
 
     // Below SQL Server's ~5,000-lock escalation threshold, so a classify chunk never locks the whole table
@@ -21,11 +24,16 @@ public sealed class SqlServerStagingStore : IStagingStore
     private const int ClassifyChunk = 4_000;
 
     private const int CommandTimeoutSeconds = 600;
-    private const int ErrorTextMax = 2000;
+    private const int ErrorTextMax = ImportRowDataReader.ErrorTextMax;
 
     private readonly IDbContextFactory<AppDbContext> _factory;
+    private readonly ILogger<SqlServerStagingStore>? _logger;
 
-    public SqlServerStagingStore(IDbContextFactory<AppDbContext> factory) => _factory = factory;
+    public SqlServerStagingStore(IDbContextFactory<AppDbContext> factory, ILogger<SqlServerStagingStore>? logger = null)
+    {
+        _factory = factory;
+        _logger = logger;
+    }
 
     public async Task<int> CreateBatchAsync(string fileName, string? sheetName, string fileHash, string? importedBy,
         CancellationToken ct = default)
@@ -50,27 +58,42 @@ public sealed class SqlServerStagingStore : IStagingStore
         var sw = Stopwatch.StartNew();
         var loaded = 0;
 
-        // Chunk() pulls from the lazy stream 5,000 rows at a time; each chunk is saved with its own context
-        // and then dropped, so memory stays flat however large the file is.
-        foreach (var chunk in rows.Chunk(ChunkSize))
+        try
         {
-            ct.ThrowIfCancellationRequested();
-
+            // SqlBulkCopy needs a raw SqlConnection; take it from a context made by the factory so the
+            // connection string still lives in one place. The context owns (and disposes) the connection.
             await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-            db.ChangeTracker.AutoDetectChangesEnabled = false; // we only Add; no need to scan for changes
-            db.Database.SetCommandTimeout(CommandTimeoutSeconds);
+            await db.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            var connection = (SqlConnection)db.Database.GetDbConnection();
 
-            db.ImportStagings.AddRange(chunk.Select(r => ToEntity(batchId, r)));
-            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            // Default options on purpose: no TableLock, so other users can stage their own batches meanwhile.
+            using var bulk = new SqlBulkCopy(connection)
+            {
+                DestinationTableName = "dbo.ImportStaging",
+                BatchSize = BulkBatchSize,           // each 10,000-row batch commits on its own
+                EnableStreaming = true,              // read from our reader as we go instead of buffering it
+                BulkCopyTimeout = CommandTimeoutSeconds,
+                NotifyAfter = ProgressEvery,
+            };
+            foreach (var name in ImportRowDataReader.ColumnNames)
+                bulk.ColumnMappings.Add(name, name); // by NAME, so column order never matters
 
-            loaded += chunk.Length;
+            bulk.SqlRowsCopied += (_, e) => progress?.Report((int)e.RowsCopied);
+
+            // The reader pulls the lazy row stream one row at a time; no list or DataTable of the file exists.
+            using var reader = new ImportRowDataReader(batchId, rows);
+            await bulk.WriteToServerAsync(reader, ct).ConfigureAwait(false);
+            loaded = reader.RowsRead;
             progress?.Report(loaded);
-        }
 
-        await using (var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false))
-        {
             await db.ImportBatches.Where(b => b.Id == batchId)
                 .ExecuteUpdateAsync(s => s.SetProperty(b => b.TotalRows, loaded), ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Batches already committed by SqlBulkCopy stay in the table, so never leave this one as 'Staged'.
+            await DiscardAsync(batchId, CancellationToken.None).ConfigureAwait(false);
+            throw;
         }
 
         sw.Stop();
@@ -181,7 +204,16 @@ public sealed class SqlServerStagingStore : IStagingStore
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
         db.Database.SetCommandTimeout(CommandTimeoutSeconds);
 
-        // Small DELETE chunks keep locks below the escalation threshold, so other users' inserts are not blocked.
+        await DeleteStagingRowsAsync(db, batchId, ct).ConfigureAwait(false);
+
+        // Only a batch that is still 'Staged' can be discarded; a Committed batch keeps its status.
+        await db.ImportBatches.Where(b => b.Id == batchId && b.Status == "Staged")
+            .ExecuteUpdateAsync(s => s.SetProperty(b => b.Status, "Discarded"), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Small DELETE chunks keep locks below the escalation threshold, so other users' inserts are not blocked.</summary>
+    private static async Task DeleteStagingRowsAsync(AppDbContext db, int batchId, CancellationToken ct)
+    {
         int deleted;
         do
         {
@@ -189,55 +221,10 @@ public sealed class SqlServerStagingStore : IStagingStore
                 $"DELETE TOP ({DeleteChunk}) FROM dbo.ImportStaging WHERE ImportBatchId = {batchId}", ct)
                 .ConfigureAwait(false);
         } while (deleted > 0);
-
-        // Only a batch that is still 'Staged' can be discarded; a Committed batch keeps its status.
-        await db.ImportBatches.Where(b => b.Id == batchId && b.Status == "Staged")
-            .ExecuteUpdateAsync(s => s.SetProperty(b => b.Status, "Discarded"), ct).ConfigureAwait(false);
     }
 
     private static string? Cut(string? value, int max) =>
         value is null || value.Length <= max ? value : value[..max];
-
-    private static ImportStaging ToEntity(int batchId, ImportRow r)
-    {
-        var invalid = !r.IsValid;
-        return new ImportStaging
-        {
-            ImportBatchId = batchId,
-            ExcelRowNumber = r.ExcelRowNumber,
-            Status = (byte)(invalid ? RowStatus.Invalid : RowStatus.Pending),
-            ErrorText = invalid ? Cut(string.Join("; ", r.Errors.Select(e => e.Message)), ErrorTextMax) : null,
-            RowHash = invalid ? null : r.RowHash,
-            PayOrderNo = r.PayOrderNo,
-            TxnRefSeqNo = r.TxnRefSeqNo,
-            ValueDate = r.ValueDate is { } d ? DateOnly.FromDateTime(d) : null,
-            BranchCode = r.BranchCode,
-            BranchName = r.BranchName,
-            RegNo = r.RegNo,
-            ApplicationNo = r.ApplicationNo,
-            PlotNo = r.PlotNo,
-            StreetNo = r.StreetNo,
-            ChallanNo = r.ChallanNo,
-            ChequeInstNo = r.ChequeInstNo,
-            CustomerName = r.CustomerName,
-            Cnic = r.Cnic,
-            Discount = r.Discount,
-            DownPaymentAmount = r.DownPaymentAmount,
-            Debit = r.Debit,
-            Credit = r.Credit,
-            RunningBalance = r.RunningBalance,
-            BankName = r.BankName,
-            AccountNo = r.AccountNo,
-            Project = r.Project,
-            DealerName = r.DealerName,
-            DataSource = r.DataSource,
-            Narration1 = r.Narration1,
-            Narration2 = r.Narration2,
-            Narration3 = r.Narration3,
-            Narration4 = r.Narration4,
-            Narration5 = r.Narration5,
-        };
-    }
 
     private static StagedRow ToStagedRow(ImportStaging s) => new()
     {

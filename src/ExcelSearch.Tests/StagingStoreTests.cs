@@ -42,6 +42,72 @@ public class StagingStoreTests
     }
 
     [DbFact]
+    public async Task Failure_mid_load_discards_the_batch_and_leaves_no_staging_rows()
+    {
+        await using var env = Create();
+        var id = await env.NewBatchAsync();
+
+        // 10,500 rows then a failure: with BatchSize 10,000 the first batch is already committed when it throws,
+        // so this proves the cleanup removes rows that really reached the table.
+        static IEnumerable<ImportRow> ThenThrow(string prefix)
+        {
+            for (var i = 0; i < 10_500; i++) yield return Row(i + 2, $"{prefix}-{i}", "T1");
+            throw new InvalidOperationException("boom");
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => env.Store.LoadRowsAsync(id, ThenThrow(env.Prefix), null));
+
+        Assert.Equal("Discarded", await env.BatchStatusAsync(id));
+        Assert.All(await env.Store.GetCountsAsync(id), c => Assert.Equal(0, c.Value));
+    }
+
+    [DbFact]
+    public async Task Bulk_load_stores_valid_invalid_and_truncated_values_exactly()
+    {
+        await using var env = Create();
+
+        var valid = Row(2, env.Key("valid"), "T1", 12.50m);
+        valid.Cnic = "3520212345671";
+        valid.Narration1 = "first narration";
+
+        var invalid = Row(3, env.Key("invalid"), "T1", invalid: true);
+
+        // What the parser does with a 250-char name: keep the first 200 characters and add an error.
+        var truncated = Row(4, env.Key("long"), "T1");
+        truncated.CustomerName = FieldLimits.Apply(nameof(ImportRow.CustomerName), new string('x', 250), out var tooLong);
+        truncated.Errors.Add(new RowError(nameof(ImportRow.CustomerName), tooLong!));
+
+        var id = await env.NewBatchAsync();
+        var load = await env.Store.LoadRowsAsync(id, new[] { valid, invalid, truncated }, null);
+        Assert.Equal(3, load.RowsLoaded);
+
+        var pending = Assert.Single((await env.Store.GetPageAsync(id, RowStatus.Pending, 1, 10)).Rows);
+        Assert.Equal(2, pending.ExcelRowNumber);
+        Assert.Equal(valid.RowHash, pending.RowHash);
+        Assert.Null(pending.ErrorText);
+        Assert.Equal(env.Key("valid"), pending.PayOrderNo);
+        Assert.Equal(new DateTime(2024, 4, 3), pending.ValueDate);
+        Assert.Equal(12.50m, pending.Debit);
+        Assert.Null(pending.Credit);
+        Assert.Null(pending.Discount);
+        Assert.Equal("3520212345671", pending.Cnic);
+        Assert.Equal("first narration", pending.Narration1);
+
+        var bad = (await env.Store.GetPageAsync(id, RowStatus.Invalid, 1, 10)).Rows.OrderBy(r => r.ExcelRowNumber).ToList();
+        Assert.Equal(2, bad.Count);
+
+        Assert.Equal(3, bad[0].ExcelRowNumber);
+        Assert.Null(bad[0].RowHash);                                  // invalid rows carry no hash
+        Assert.Equal("Debit is not a valid amount", bad[0].ErrorText);
+
+        Assert.Equal(4, bad[1].ExcelRowNumber);
+        Assert.Null(bad[1].RowHash);
+        Assert.Equal(tooLong, bad[1].ErrorText);
+        Assert.Equal(200, bad[1].CustomerName!.Length);               // truncated value kept, not dropped
+        Assert.Equal(new string('x', 200), bad[1].CustomerName);
+    }
+
+    [DbFact]
     public async Task Classify_assigns_all_five_statuses()
     {
         await using var env = Create();
@@ -247,28 +313,49 @@ public class StagingStoreTests
             var baseline = proc.WorkingSet64;
             long peak = baseline;
 
-            var service = new ImportPreviewService(new ExcelParser(), env.Store);
+            var parser = new ExcelParser();
+
+            // 1. Parse alone: a streaming pass that discards the rows (parsing is lazy, so this is its own cost).
+            var sw = Stopwatch.StartNew();
+            int parsed;
+            using (var file = parser.Parse(path, null, CancellationToken.None))
+                parsed = file.Rows.Count();
+            var parseTime = sw.Elapsed;
+
+            // 2. Load: parse + SQL insert are interleaved (rows stream straight into the store).
+            //    Load minus parse is the cost of the database side alone.
             var progress = new Progress<int>(_ =>
             {
                 proc.Refresh();
                 peak = Math.Max(peak, proc.WorkingSet64);
             });
+            using var file2 = parser.Parse(path, null, CancellationToken.None);
+            var batchId = await env.Store.CreateBatchAsync(file2.FileName, file2.SheetName, file2.FileHash, "TEST\\user");
+            env.TrackBatch(batchId); // removed by env.DisposeAsync: staging rows, then the batch
+            sw.Restart();
+            var load = await env.Store.LoadRowsAsync(batchId, file2.Rows, progress);
+            var loadTime = sw.Elapsed;
 
-            var result = await service.StageFileAsync(path, "TEST\\user", progress);
-            Assert.NotNull(result.BatchId);
-            env.TrackBatch(result.BatchId!.Value); // removed by env.DisposeAsync: staging rows, then the batch
+            // 3. Classify (set-based SQL) and counts.
+            sw.Restart();
+            await env.Store.ClassifyAsync(batchId);
+            var classifyTime = sw.Elapsed;
+            var counts = await env.Store.GetCountsAsync(batchId);
 
             proc.Refresh();
             peak = Math.Max(peak, proc.WorkingSet64);
 
-            _output.WriteLine($"Rows loaded: {result.RowsLoaded:N0}");
-            _output.WriteLine($"Counts: {string.Join(", ", result.Counts.Select(c => $"{c.Key}={c.Value:N0}"))}");
-            _output.WriteLine($"Total time (parse + load + classify + counts): {result.TotalElapsed.TotalSeconds:F1}s");
-            _output.WriteLine($"Load rate: {result.LoadRowsPerSecond:N0} rows/s");
+            _output.WriteLine($"Rows loaded: {load.RowsLoaded:N0}");
+            _output.WriteLine($"Counts: {string.Join(", ", counts.Select(c => $"{c.Key}={c.Value:N0}"))}");
+            _output.WriteLine($"Parse alone:  {parseTime.TotalSeconds:F1}s");
+            _output.WriteLine($"Load (parse + insert): {loadTime.TotalSeconds:F1}s  = {load.RowsPerSecond:N0} rows/s; insert only ~{(loadTime - parseTime).TotalSeconds:F1}s");
+            _output.WriteLine($"Classify:     {classifyTime.TotalSeconds:F1}s");
+            _output.WriteLine($"Total (load + classify, parse included in load): {(loadTime + classifyTime).TotalSeconds:F1}s");
             _output.WriteLine($"Working set: baseline {baseline / 1048576.0:F0} MB, peak {peak / 1048576.0:F0} MB, growth {(peak - baseline) / 1048576.0:F0} MB");
 
-            Assert.Equal(200_000, result.RowsLoaded);
-            Assert.Equal(200_000, result.Counts[RowStatus.New]);
+            Assert.Equal(200_000, parsed);
+            Assert.Equal(200_000, load.RowsLoaded);
+            Assert.Equal(200_000, counts[RowStatus.New]);
         }
         finally
         {
