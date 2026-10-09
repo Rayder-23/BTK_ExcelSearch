@@ -484,3 +484,6 @@ $RECYCLE.BIN/
 # Local/environment settings with real credentials (copy from the *.example files)
 appsettings.Development.json
 appsettings.Production.json
+
+# Claude Code local settings
+.claude/settings.local
