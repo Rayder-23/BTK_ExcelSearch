@@ -1,4 +1,6 @@
 using System.Windows;
+using ExcelSearch.Core.Import;
+using ExcelSearch.Core.Staging;
 using ExcelSearch.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -24,10 +26,14 @@ namespace ExcelSearch
 #endif
                 .ConfigureServices((context, services) =>
                 {
-                    // Transient: a desktop app has no request scope, so each window gets its own context.
-                    services.AddDbContext<AppDbContext>(options =>
-                        options.UseSqlServer(context.Configuration.GetConnectionString("DefaultConnection")),
-                        ServiceLifetime.Transient, ServiceLifetime.Transient);
+                    // A factory instead of an injected context: a desktop app has no request scope, and the
+                    // staging store needs a fresh short-lived context per chunk. Consumers call CreateDbContext().
+                    services.AddDbContextFactory<AppDbContext>(options =>
+                        options.UseSqlServer(context.Configuration.GetConnectionString("DefaultConnection")));
+
+                    services.AddSingleton<IExcelParser, ExcelParser>();
+                    services.AddSingleton<IStagingStore, SqlServerStagingStore>();
+                    services.AddSingleton<ImportPreviewService>();
 
                     services.AddTransient<MainWindow>();
                 })

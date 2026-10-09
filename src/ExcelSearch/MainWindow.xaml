@@ -6,8 +6,14 @@
         xmlns:local="clr-namespace:ExcelSearch"
         mc:Ignorable="d"
         Title="MainWindow" Height="450" Width="800">
-    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="420">
         <Button x:Name="CountButton" Content="Count Transactions" Padding="16,6" Click="CountButton_Click" />
         <TextBlock x:Name="CountText" Margin="0,12,0,0" HorizontalAlignment="Center" />
+
+        <!-- Temporary staging test UI -->
+        <Button x:Name="ChooseButton" Content="Choose Excel file" Padding="16,6" Margin="0,32,0,0" Click="ChooseButton_Click" />
+        <ProgressBar x:Name="StageProgress" Height="16" Margin="0,12,0,0" Minimum="0" Maximum="1" Visibility="Hidden" />
+        <TextBlock x:Name="StageText" Margin="0,12,0,0" TextWrapping="Wrap" />
+        <Button x:Name="DiscardButton" Content="Discard" Padding="16,6" Margin="0,12,0,0" IsEnabled="False" Click="DiscardButton_Click" />
     </StackPanel>
 </Window>
