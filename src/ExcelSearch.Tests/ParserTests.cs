@@ -127,7 +127,8 @@ public class ParserTests : IDisposable
         var path = Path.Combine(_dir, Guid.NewGuid().ToString("N") + ".xlsx");
         using var wb = new XLWorkbook();
         fill(wb.AddWorksheet("Sheet1"));
-        wb.SaveAs(path);
+        // ExcelDataReader reads cached values, so formulas must be evaluated and stored when saving.
+        wb.SaveAs(path, new SaveOptions { EvaluateFormulasBeforeSaving = true });
         return path;
     }
 
@@ -139,7 +140,15 @@ public class ParserTests : IDisposable
 
     private static int Col(string header) => Array.IndexOf(AllHeaders, header) + 1;
 
-    private static ParseResult Parse(string path) => new ExcelParser().Parse(path, null, CancellationToken.None);
+    /// <summary>Parses and fully enumerates the streaming result so tests can inspect everything.</summary>
+    private static ParseResultSnapshot Parse(string path)
+    {
+        using var file = new ExcelParser().Parse(path, null, CancellationToken.None);
+        return new ParseResultSnapshot(file.FileName, file.FileHash, file.SheetName, file.FileErrors.ToList(), file.Rows.ToList());
+    }
+
+    private sealed record ParseResultSnapshot(string FileName, string FileHash, string SheetName,
+        List<string> FileErrors, List<ImportRow> Rows);
 
     [Fact]
     public void Both_typo_headers_and_extra_columns_are_handled()
@@ -262,48 +271,6 @@ public class ParserTests : IDisposable
     }
 
     [Fact]
-    public void Identical_rows_with_same_key_are_flagged_as_file_duplicates_not_errors()
-    {
-        var path = Workbook(ws =>
-        {
-            WriteHeaders(ws);
-            for (var r = 2; r <= 3; r++)
-            {
-                ws.Cell(r, Col("Value Date")).Value = new DateTime(2024, 4, 3);
-                ws.Cell(r, Col("payorder no")).Value = "PO1";
-                ws.Cell(r, Col("Txn Ref/ Seq No")).Value = "T1";
-                ws.Cell(r, Col("Debit")).Value = 100;
-            }
-        });
-
-        var rows = Parse(path).Rows;
-        Assert.False(rows[0].IsFileDuplicate);
-        Assert.True(rows[1].IsFileDuplicate);
-        Assert.All(rows, r => Assert.True(r.IsValid));
-    }
-
-    [Fact]
-    public void Same_key_with_different_values_is_an_error_on_every_row_naming_the_others()
-    {
-        var path = Workbook(ws =>
-        {
-            WriteHeaders(ws);
-            for (var r = 2; r <= 3; r++)
-            {
-                ws.Cell(r, Col("Value Date")).Value = new DateTime(2024, 4, 3);
-                ws.Cell(r, Col("payorder no")).Value = "PO1";
-                ws.Cell(r, Col("Txn Ref/ Seq No")).Value = "T1";
-                ws.Cell(r, Col("Debit")).Value = r * 100;
-            }
-        });
-
-        var rows = Parse(path).Rows;
-        Assert.All(rows, r => Assert.False(r.IsFileDuplicate));
-        Assert.Contains("3", Assert.Single(rows[0].Errors).Message);
-        Assert.Contains("2", Assert.Single(rows[1].Errors).Message);
-    }
-
-    [Fact]
     public void Row_hash_is_stable_lowercase_hex_and_changes_with_values()
     {
         var a = new ImportRow { PayOrderNo = "P", TxnRefSeqNo = "T", ValueDate = new DateTime(2024, 4, 3), Debit = 1m };
@@ -333,5 +300,76 @@ public class ParserTests : IDisposable
         Assert.Equal(14, r.Rows.Count);
         Assert.Equal(1, valid);
         Assert.Equal(13, invalid);
+
+        // The =3500000-642555 formula cell is read through its cached value.
+        Assert.Contains(r.Rows, x => x.Credit == 2857445m);
+    }
+
+    [Fact]
+    public void Too_long_text_is_an_error_and_the_value_is_truncated_to_the_column_size()
+    {
+        var path = Workbook(ws =>
+        {
+            WriteHeaders(ws);
+            ws.Cell(2, Col("Value Date")).Value = new DateTime(2024, 4, 3);
+            ws.Cell(2, Col("payorder no")).Value = new string('P', 51);   // max 50
+            ws.Cell(2, Col("Txn Ref/ Seq No")).Value = new string('T', 50); // exactly 50: fine
+            ws.Cell(2, Col("Br. Code")).Value = new string('B', 21);       // max 20
+            ws.Cell(2, Col("CNIC No")).Value = new string('9', 21);        // max 20 digits
+            ws.Cell(2, Col("Narration 3")).Value = new string('N', 501);   // max 500
+        });
+
+        var row = Assert.Single(Parse(path).Rows);
+        Assert.False(row.IsValid);
+        Assert.Equal(new[] { "BranchCode", "Cnic", "Narration3", "PayOrderNo" },
+            row.Errors.Select(e => e.Field).OrderBy(x => x));
+        Assert.Equal(50, row.PayOrderNo!.Length);
+        Assert.Equal(50, row.TxnRefSeqNo!.Length);
+        Assert.Equal(20, row.BranchCode!.Length);
+        Assert.Equal(20, row.Cnic!.Length);
+        Assert.Equal(500, row.Narration3!.Length);
+    }
+
+    [Fact]
+    public void Rows_are_streamed_and_file_is_released_when_enumeration_ends()
+    {
+        var path = Workbook(ws =>
+        {
+            WriteHeaders(ws);
+            for (var r = 2; r <= 4; r++)
+            {
+                ws.Cell(r, Col("Value Date")).Value = new DateTime(2024, 4, 3);
+                ws.Cell(r, Col("payorder no")).Value = "PO" + r;
+                ws.Cell(r, Col("Txn Ref/ Seq No")).Value = "T" + r;
+            }
+        });
+
+        var reported = new List<int>();
+        using (var file = new ExcelParser().Parse(path, new Progress<int>(reported.Add), CancellationToken.None))
+        {
+            Assert.Equal(64, file.FileHash.Length);
+            using var e = file.Rows.GetEnumerator();
+            Assert.True(e.MoveNext());
+            Assert.Equal(2, e.Current.ExcelRowNumber);
+        }
+
+        File.Delete(path); // would throw if the parser still held the file open
+    }
+
+    [Fact]
+    public void Cancellation_stops_enumeration()
+    {
+        var path = Workbook(ws =>
+        {
+            WriteHeaders(ws);
+            ws.Cell(2, Col("Value Date")).Value = new DateTime(2024, 4, 3);
+            ws.Cell(2, Col("payorder no")).Value = "PO1";
+            ws.Cell(2, Col("Txn Ref/ Seq No")).Value = "T1";
+        });
+
+        using var cts = new CancellationTokenSource();
+        using var file = new ExcelParser().Parse(path, null, cts.Token);
+        cts.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => file.Rows.ToList());
     }
 }

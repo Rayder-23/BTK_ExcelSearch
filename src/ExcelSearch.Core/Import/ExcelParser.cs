@@ -1,116 +1,146 @@
 using System.Security.Cryptography;
-using ClosedXML.Excel;
+using System.Text;
+using ExcelDataReader;
 
 namespace ExcelSearch.Core.Import;
 
-/// <summary>ClosedXML implementation of <see cref="IExcelParser"/>.</summary>
+/// <summary>
+/// ExcelDataReader implementation of <see cref="IExcelParser"/> (.xlsx only). ExcelDataReader is a forward-only
+/// reader, so a file with hundreds of thousands of rows is never held in memory: each row is read, normalized,
+/// validated and handed to the caller, then dropped.
+/// </summary>
 public sealed class ExcelParser : IExcelParser
 {
     private const int HeaderScanRows = 10;
+    private const int ProgressEvery = 500;
 
-    public ParseResult Parse(string path, IProgress<int>? progress, CancellationToken ct)
+    static ExcelParser()
     {
-        var result = new ParseResult { FileName = Path.GetFileName(path) };
+        // ExcelDataReader looks up code page 1252 even for .xlsx; .NET only knows it after this registration.
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
 
-        // Read the bytes once (FileShare.ReadWrite so a workbook open in Excel can still be read),
-        // hash them, then load the workbook from memory.
-        byte[] bytes;
+    public ParsedFile Parse(string path, IProgress<int>? progress, CancellationToken ct)
+    {
+        FileStream? stream = null;
+        IExcelDataReader? reader = null;
+        var file = new ParsedFile { FileName = Path.GetFileName(path) };
+
         try
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var ms = new MemoryStream();
-            fs.CopyTo(ms);
-            bytes = ms.ToArray();
+            // Pass 1: hash the file by streaming it through SHA-256 (never loaded whole).
+            file.FileHash = HashFile(path, ct);
+
+            // Pass 2: open the same file for reading. FileShare.ReadWrite so a workbook open in Excel still works.
+            stream = OpenRead(path);
+            reader = ExcelReaderFactory.CreateOpenXmlReader(stream);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            result.FileErrors.Add($"Cannot read file: {ex.Message}");
-            return result;
+            reader?.Dispose();
+            stream?.Dispose();
+            file.FileErrors.Add($"Cannot read file: {ex.Message}");
+            return file;
         }
-
-        result.FileHash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-
-        XLWorkbook workbook;
-        try
+        catch (OperationCanceledException)
         {
-            workbook = new XLWorkbook(new MemoryStream(bytes));
+            throw;
         }
         catch (Exception ex)
         {
-            result.FileErrors.Add($"Not a readable .xlsx workbook: {ex.Message}");
+            reader?.Dispose();
+            stream?.Dispose();
+            file.FileErrors.Add($"Not a readable .xlsx workbook: {ex.Message}");
+            return file;
+        }
+
+        var resource = new Disposables(reader, stream);
+        var result = new ParsedFile(resource)
+        {
+            FileName = file.FileName,
+            FileHash = file.FileHash,
+        };
+
+        try
+        {
+            // Use the first sheet that has a header row; if none does, report against the first sheet.
+            List<string>? missingOnFirstSheet = null;
+            string? firstSheetName = null;
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                firstSheetName ??= reader.Name;
+
+                if (TryFindHeader(reader, out var headerRow, out var columns, out var missing))
+                {
+                    result.SheetName = reader.Name;
+                    result.Rows = StreamRows(reader, resource, columns!, headerRow, progress, ct);
+                    return result;
+                }
+
+                missingOnFirstSheet ??= missing;
+            } while (reader.NextResult());
+
+            result.SheetName = firstSheetName ?? "";
+            result.FileErrors.Add("Required header(s) not found in the first " + HeaderScanRows + " rows: " +
+                                  string.Join(", ", missingOnFirstSheet ?? HeaderAliases.Required.Select(r => r.Display).ToList()));
+            resource.Dispose();
             return result;
         }
+        catch
+        {
+            resource.Dispose();
+            throw;
+        }
+    }
 
-        using (workbook)
+    private static FileStream OpenRead(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize: 81920, FileOptions.SequentialScan);
+
+    private static string HashFile(string path, CancellationToken ct)
+    {
+        using var fs = OpenRead(path);
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[81920];
+        int read;
+        while ((read = fs.Read(buffer, 0, buffer.Length)) > 0)
         {
             ct.ThrowIfCancellationRequested();
-
-            if (workbook.Worksheets.Count == 0)
-            {
-                result.FileErrors.Add("The workbook has no worksheets.");
-                return result;
-            }
-
-            // Use the first sheet that has a header row; if none does, report against the first sheet.
-            IXLWorksheet? sheet = null;
-            Dictionary<string, int>? columns = null;
-            int headerRow = 0;
-            foreach (var ws in workbook.Worksheets)
-            {
-                if (TryFindHeader(ws, out headerRow, out columns, out _))
-                {
-                    sheet = ws;
-                    break;
-                }
-            }
-
-            if (sheet is null || columns is null)
-            {
-                var first = workbook.Worksheets.First();
-                result.SheetName = first.Name;
-                TryFindHeader(first, out _, out _, out var missing);
-                result.FileErrors.Add("Required header(s) not found in the first " + HeaderScanRows + " rows: " +
-                                      string.Join(", ", missing));
-                return result;
-            }
-
-            result.SheetName = sheet.Name;
-            ReadRows(sheet, headerRow, columns, result, progress, ct);
+            sha.AppendData(buffer, 0, read);
         }
-
-        MarkFileDuplicates(result.Rows);
-        return result;
+        return Convert.ToHexString(sha.GetHashAndReset()).ToLowerInvariant();
     }
 
     /// <summary>
-    /// Scans the first rows for one containing all required headers. When none does, <paramref name="missing"/>
-    /// lists the required headers absent from the best candidate row.
+    /// Reads up to the first 10 rows of the current sheet looking for one that holds all required headers.
+    /// On success the reader is positioned ON the header row. On failure <paramref name="missing"/> lists the
+    /// required headers absent from the best candidate row.
     /// </summary>
-    private static bool TryFindHeader(IXLWorksheet ws, out int headerRow, out Dictionary<string, int>? columns,
+    private static bool TryFindHeader(IExcelDataReader reader, out int headerRow, out Dictionary<string, int>? columns,
         out List<string> missing)
     {
         headerRow = 0;
         columns = null;
         missing = HeaderAliases.Required.Select(r => r.Display).ToList();
-
-        var lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
         var bestFound = -1;
 
-        for (var r = 1; r <= Math.Min(HeaderScanRows, lastRow); r++)
+        var rowNumber = 0;
+        while (rowNumber < HeaderScanRows && reader.Read())
         {
+            rowNumber++;
             var map = new Dictionary<string, int>();
-            var row = ws.Row(r);
-            var lastCol = row.LastCellUsed()?.Address.ColumnNumber ?? 0;
-            for (var c = 1; c <= lastCol; c++)
+            for (var c = 0; c < reader.FieldCount; c++)
             {
-                var field = HeaderAliases.Resolve(row.Cell(c).GetString());
+                var cell = reader.GetValue(c);
+                if (cell is null) continue;
+                var field = HeaderAliases.Resolve(Convert.ToString(cell, System.Globalization.CultureInfo.InvariantCulture));
                 if (field is not null) map.TryAdd(field, c); // first column wins if a header repeats
             }
 
             var found = HeaderAliases.Required.Count(req => map.ContainsKey(req.Field));
             if (found == HeaderAliases.Required.Length)
             {
-                headerRow = r;
+                headerRow = rowNumber;
                 columns = map;
                 missing = new List<string>();
                 return true;
@@ -126,61 +156,71 @@ public sealed class ExcelParser : IExcelParser
         return false;
     }
 
-    private static void ReadRows(IXLWorksheet sheet, int headerRow, Dictionary<string, int> columns,
-        ParseResult result, IProgress<int>? progress, CancellationToken ct)
+    /// <summary>Lazy row stream. The finally block releases the file when enumeration ends, fails or is abandoned.</summary>
+    private static IEnumerable<ImportRow> StreamRows(IExcelDataReader reader, IDisposable resource,
+        Dictionary<string, int> columns, int headerRow, IProgress<int>? progress, CancellationToken ct)
     {
-        var lastRow = sheet.LastRowUsed()?.RowNumber() ?? headerRow;
-        var processed = 0;
-
-        for (var r = headerRow + 1; r <= lastRow; r++)
+        try
         {
-            ct.ThrowIfCancellationRequested();
+            var rowNumber = headerRow;
+            var processed = 0;
 
-            var raw = new Dictionary<string, object?>();
-            foreach (var (field, col) in columns)
+            while (reader.Read())
             {
-                var cell = sheet.Cell(r, col);
-                raw[field] = ReadCell(cell, out var cellError);
-                if (cellError is not null) raw[field] = new CellErrorMarker(cellError);
+                ct.ThrowIfCancellationRequested();
+                rowNumber++;
+
+                var raw = new Dictionary<string, object?>(columns.Count);
+                var blank = true;
+                foreach (var (field, col) in columns)
+                {
+                    var value = col < reader.FieldCount ? ReadValue(reader.GetValue(col)) : null;
+                    if (value is string s && string.IsNullOrWhiteSpace(s)) value = null;
+                    if (value is not null) blank = false;
+                    raw[field] = value;
+                }
+
+                // Completely blank rows (every mapped cell empty) are skipped silently.
+                if (blank) continue;
+
+                processed++;
+                if (processed % ProgressEvery == 0) progress?.Report(processed);
+                yield return BuildRow(rowNumber, raw);
             }
 
-            // Completely blank rows (every mapped cell empty) are skipped silently.
-            if (raw.Values.All(v => v is null || (v is string s && string.IsNullOrWhiteSpace(s)))) continue;
-
-            result.Rows.Add(BuildRow(r, raw));
-            progress?.Report(++processed);
+            progress?.Report(processed);
         }
-    }
-
-    /// <summary>Reads a cell by value. Formula cells give their calculated result.</summary>
-    private static object? ReadCell(IXLCell cell, out string? error)
-    {
-        error = null;
-        var v = cell.Value;
-        if (v.IsBlank) return null;
-        if (v.IsError)
+        finally
         {
-            error = $"cell contains an Excel error ({v})";
-            return null;
+            resource.Dispose();
         }
-        if (v.IsText) return v.GetText();
-        if (v.IsNumber) return v.GetNumber();
-        if (v.IsDateTime) return v.GetDateTime();
-        if (v.IsBoolean) return v.GetBoolean();
-        return v.ToString();
     }
 
     private sealed record CellErrorMarker(string Message);
+
+    /// <summary>Maps what ExcelDataReader returns to null, string, double, DateTime, bool or an error marker.</summary>
+    private static object? ReadValue(object? v) => v switch
+    {
+        null => null,
+        string or double or DateTime or bool => v,
+        int or long or short or byte or float or decimal => Convert.ToDouble(v, System.Globalization.CultureInfo.InvariantCulture),
+        _ when v.GetType().Name.Contains("Error", StringComparison.OrdinalIgnoreCase) =>
+            new CellErrorMarker($"cell contains an Excel error ({v})"),
+        _ => Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture),
+    };
 
     private static ImportRow BuildRow(int excelRow, Dictionary<string, object?> raw)
     {
         var row = new ImportRow { ExcelRowNumber = excelRow };
 
+        // Normalize to trimmed text, cut to the column size (too long = error, truncated value kept).
         void Text(string field, Action<string?> set)
         {
             if (!raw.TryGetValue(field, out var v)) return;
             if (v is CellErrorMarker m) { row.Errors.Add(new RowError(field, m.Message)); return; }
-            set(FieldNormalizer.Text(v));
+            var text = field == nameof(ImportRow.Cnic) ? FieldNormalizer.Cnic(v) : FieldNormalizer.Text(v);
+            set(FieldLimits.Apply(field, text, out var tooLong));
+            if (tooLong is not null) row.Errors.Add(new RowError(field, tooLong));
         }
 
         void Amount(string field, Action<decimal?> set)
@@ -200,6 +240,7 @@ public sealed class ExcelParser : IExcelParser
         Text(nameof(ImportRow.ChallanNo), v => row.ChallanNo = v);
         Text(nameof(ImportRow.ChequeInstNo), v => row.ChequeInstNo = v);
         Text(nameof(ImportRow.CustomerName), v => row.CustomerName = v);
+        Text(nameof(ImportRow.Cnic), v => row.Cnic = v);
         Text(nameof(ImportRow.PayOrderNo), v => row.PayOrderNo = v);
         Text(nameof(ImportRow.TxnRefSeqNo), v => row.TxnRefSeqNo = v);
         Text(nameof(ImportRow.BankName), v => row.BankName = v);
@@ -212,12 +253,6 @@ public sealed class ExcelParser : IExcelParser
         Text(nameof(ImportRow.Narration3), v => row.Narration3 = v);
         Text(nameof(ImportRow.Narration4), v => row.Narration4 = v);
         Text(nameof(ImportRow.Narration5), v => row.Narration5 = v);
-
-        if (raw.TryGetValue(nameof(ImportRow.Cnic), out var cnic))
-        {
-            if (cnic is CellErrorMarker m) row.Errors.Add(new RowError(nameof(ImportRow.Cnic), m.Message));
-            else row.Cnic = FieldNormalizer.Cnic(cnic);
-        }
 
         Amount(nameof(ImportRow.Discount), v => row.Discount = v);
         Amount(nameof(ImportRow.DownPaymentAmount), v => row.DownPaymentAmount = v);
@@ -253,33 +288,13 @@ public sealed class ExcelParser : IExcelParser
         return row;
     }
 
-    /// <summary>
-    /// Rows sharing (PayOrderNo, TxnRefSeqNo): identical hashes mean the later rows are harmless duplicates;
-    /// differing hashes mean a conflict, reported on every row of the group. Keys compare case-insensitively
-    /// because the database collation does.
-    /// </summary>
-    private static void MarkFileDuplicates(List<ImportRow> rows)
+    private sealed class Disposables : IDisposable
     {
-        var groups = rows
-            .Where(r => r.PayOrderNo is not null && r.TxnRefSeqNo is not null)
-            .GroupBy(r => (r.PayOrderNo!.ToUpperInvariant(), r.TxnRefSeqNo!.ToUpperInvariant()))
-            .Where(g => g.Count() > 1);
-
-        foreach (var g in groups)
+        private readonly IDisposable[] _items;
+        public Disposables(params IDisposable[] items) => _items = items;
+        public void Dispose()
         {
-            var members = g.OrderBy(r => r.ExcelRowNumber).ToList();
-            if (members.Select(r => r.RowHash).Distinct().Count() == 1)
-            {
-                foreach (var later in members.Skip(1)) later.IsFileDuplicate = true;
-                continue;
-            }
-
-            foreach (var r in members)
-            {
-                var others = string.Join(", ", members.Where(o => o != r).Select(o => o.ExcelRowNumber));
-                r.Errors.Add(new RowError(nameof(ImportRow.PayOrderNo),
-                    $"Same PayOrderNo + TxnRefSeqNo as row(s) {others} in this file, but the values differ"));
-            }
+            foreach (var item in _items) item.Dispose();
         }
     }
 }

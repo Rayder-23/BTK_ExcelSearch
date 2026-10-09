@@ -38,12 +38,6 @@ public sealed class ImportRow
     /// <summary>SHA-256 hex of the normalized business fields (see RowHasher).</summary>
     public string RowHash { get; set; } = "";
 
-    /// <summary>
-    /// True when an earlier row in the same file has the same key and identical values.
-    /// Not an error: the importer should simply skip this row.
-    /// </summary>
-    public bool IsFileDuplicate { get; set; }
-
     public List<RowError> Errors { get; } = new();
 
     public bool IsValid => Errors.Count == 0;
