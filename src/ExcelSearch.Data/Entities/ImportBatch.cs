@@ -25,5 +25,13 @@ public partial class ImportBatch
 
     public int RejectedRows { get; set; }
 
+    public string Status { get; set; } = null!;
+
+    public DateTime? CommittedAt { get; set; }
+
+    public string? ImportedBy { get; set; }
+
+    public virtual ICollection<ImportStaging> ImportStagings { get; set; } = new List<ImportStaging>();
+
     public virtual ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
 }
