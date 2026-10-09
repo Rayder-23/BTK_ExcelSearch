@@ -4,19 +4,22 @@ This file provides guidance to every coding agent when working with code in this
 
 ## Project status
 
-Early scaffold of a WPF app that will import bank-transaction Excel sheets into SQL Server and search them. Today the only working feature is a button on `MainWindow` that counts `Transactions` rows (a connection check). `ExcelSearch.Core` is an empty library (ClosedXML referenced, no code yet); there is no import logic, search screen, test project or linter.
+Early scaffold of a WPF app that will import bank-transaction Excel sheets into SQL Server and search them. Today the only working feature is a button on `MainWindow` that counts `Transactions` rows (a connection check). `ExcelSearch.Core/Import` holds a streaming Excel parser (ExcelDataReader, xlsx only) that yields normalized, validated rows lazily; `ExcelSearch.Tests` (xUnit) covers it. `ExcelSearch.Core/Staging` (`IStagingStore`, `ImportPreviewService`) and `ExcelSearch.Data/SqlServerStagingStore` stage a parsed file into `ImportStaging` and classify it in SQL; the window has a temporary Choose file / Discard test UI. Committing into `Transactions` is not built yet. There is no linter.
 
 ## Commands
 
 ```
 dotnet build ExcelSearch.sln
 dotnet run --project src/ExcelSearch
+dotnet test src/ExcelSearch.Tests
 ```
+
+Database tests run against the single development database using the app's own configuration. Every test uses unique `TEST_<guid>` keys and deletes only the rows it created (never truncate or reseed). Set `EXCELSEARCH_SKIP_DB_TESTS=1` to skip them; the 200,000-row test also needs `EXCELSEARCH_RUN_LARGE=1`.
 
 Re-scaffold the EF model after a schema change (generated code is not hand-edited; use your real connection string):
 
 ```
-dotnet ef dbcontext scaffold "<connection string>" Microsoft.EntityFrameworkCore.SqlServer --project src/ExcelSearch.Data --startup-project src/ExcelSearch --context AppDbContext --context-dir . --output-dir Entities --namespace ExcelSearch.Data.Entities --context-namespace ExcelSearch.Data --table dbo.ImportBatches --table dbo.Transactions --no-onconfiguring --force
+dotnet ef dbcontext scaffold "<connection string>" Microsoft.EntityFrameworkCore.SqlServer --project src/ExcelSearch.Data --startup-project src/ExcelSearch --context AppDbContext --context-dir . --output-dir Entities --namespace ExcelSearch.Data.Entities --context-namespace ExcelSearch.Data --table dbo.ImportBatches --table dbo.Transactions --table dbo.ImportStaging --no-onconfiguring --force
 ```
 
 `dotnet-ef` is installed as a global tool. Pass the connection string on the command line: the WPF project's host config is not available to `dotnet ef` at design time.
@@ -24,8 +27,8 @@ dotnet ef dbcontext scaffold "<connection string>" Microsoft.EntityFrameworkCore
 ## Architecture
 
 - `src/ExcelSearch` (net8.0-windows, WPF) references `ExcelSearch.Core` and `ExcelSearch.Data` (both net8.0). Core and Data must never reference the WPF project.
-- Startup is in `App.xaml.cs`, not `StartupUri`: it builds a generic host, registers `AppDbContext` and `MainWindow` in DI, and shows the window from the host. Windows get their dependencies by constructor injection.
-- `AppDbContext` and its options are registered **transient**. Do not change this to the default scoped lifetime: in the Development environment the container validates scopes, and a scoped context cannot be injected into a window resolved from the root provider (the app crashes on startup).
+- Startup is in `App.xaml.cs`, not `StartupUri`: it builds a generic host, registers the context factory, parser, staging store and `MainWindow` in DI, and shows the window from the host. Windows get their dependencies by constructor injection.
+- `AppDbContext` is registered through `AddDbContextFactory` (a singleton factory); consumers inject `IDbContextFactory<AppDbContext>` and create a short-lived context per operation. Do not inject a scoped `AppDbContext` into windows: the Development environment validates scopes and the app would crash on startup.
 - `ExcelSearch.Data` holds scaffolded output only (`AppDbContext.cs`, `Entities/`). Add customisations through the generated partial hooks (`OnModelCreatingPartial`, `partial class` entities), or they are lost on the next `--force` scaffold.
 - EF Core and Hosting package versions must stay on the 8.x line to match the target framework.
 
