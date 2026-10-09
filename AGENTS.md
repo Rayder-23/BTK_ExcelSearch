@@ -4,7 +4,7 @@ This file provides guidance to every coding agent when working with code in this
 
 ## Project status
 
-Early scaffold of a WPF app that will import bank-transaction Excel sheets into SQL Server and search them. Today the only working feature is a button on `MainWindow` that counts `Transactions` rows (a connection check). `ExcelSearch.Core/Import` holds a streaming Excel parser (ExcelDataReader, xlsx only) that yields normalized, validated rows lazily; `ExcelSearch.Tests` (xUnit) covers it. `ExcelSearch.Core/Staging` (`IStagingStore`, `ImportPreviewService`) and `ExcelSearch.Data/SqlServerStagingStore` stage a parsed file into `ImportStaging` and classify it in SQL; the window has a temporary Choose file / Discard test UI. Committing into `Transactions` is not built yet. There is no linter.
+Early scaffold of a WPF app that will import bank-transaction Excel sheets into SQL Server and search them. Today the only working feature is a button on `MainWindow` that counts `Transactions` rows (a connection check). `ExcelSearch.Core/Import` holds a streaming Excel parser (ExcelDataReader, xlsx only) that yields normalized, validated rows lazily; `ExcelSearch.Tests` (xUnit) covers it. `ExcelSearch.Core/Staging` (`IStagingStore`, `ImportPreviewService`) and `ExcelSearch.Data/SqlServerStagingStore` stage a parsed file into `ImportStaging` and classify it in SQL; the window has a temporary Choose file / Overwrite conflicts / Commit / Discard test UI. `CommitAsync` (same store) writes a staged batch into `Transactions` in one transaction under the `ExcelSearch.Commit` application lock, then deletes its staging rows; `CleanupStaleBatchesAsync` runs at startup. There is no linter.
 
 ## Commands
 

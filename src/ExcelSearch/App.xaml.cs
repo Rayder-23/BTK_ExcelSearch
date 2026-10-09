@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace ExcelSearch
 {
@@ -45,6 +46,23 @@ namespace ExcelSearch
             await _host.StartAsync();
 
             _host.Services.GetRequiredService<MainWindow>().Show();
+
+            // Housekeeping in the background: a failure here is logged and never blocks or crashes startup.
+            var preview = _host.Services.GetRequiredService<ImportPreviewService>();
+            var logger = _host.Services.GetRequiredService<ILogger<App>>();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var cleanup = await preview.CleanupStaleBatchesAsync();
+                    logger.LogInformation("Startup cleanup: {Stale} stale batch(es) discarded, {Left} leftover batch(es) cleaned.",
+                        cleanup.StaleBatchesDiscarded, cleanup.LeftoverBatchesCleaned);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Startup cleanup of stale import batches failed.");
+                }
+            });
 
             base.OnStartup(e);
         }

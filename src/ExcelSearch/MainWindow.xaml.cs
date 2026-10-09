@@ -15,6 +15,7 @@ namespace ExcelSearch
         private readonly ImportPreviewService _preview;
         private readonly IStagingStore _staging;
         private int? _batchId;
+        private IReadOnlyDictionary<RowStatus, int>? _counts;
 
         public MainWindow(IDbContextFactory<AppDbContext> dbFactory, ImportPreviewService preview, IStagingStore staging)
         {
@@ -66,7 +67,10 @@ namespace ExcelSearch
                 else
                 {
                     _batchId = result.BatchId;
+                    _counts = result.Counts;
                     DiscardButton.IsEnabled = true;
+                    OverwriteCheck.IsEnabled = true;
+                    UpdateCommitEnabled();
                     StageText.Text = $"Batch {result.BatchId}: " +
                         string.Join(", ", result.Counts.Select(c => $"{c.Key} {c.Value:N0}")) +
                         $" ({result.RowsLoaded:N0} rows, {result.LoadRowsPerSecond:N0} rows/s load, {result.TotalElapsed.TotalSeconds:F1}s total)";
@@ -93,12 +97,80 @@ namespace ExcelSearch
             {
                 await _staging.DiscardAsync(id);
                 StageText.Text = $"Batch {id} discarded.";
-                _batchId = null;
+                ClearBatch();
             }
             catch (Exception ex)
             {
                 StageText.Text = $"Discard failed: {ex.Message}";
                 DiscardButton.IsEnabled = true;
+            }
+        }
+
+        private void ClearBatch()
+        {
+            _batchId = null;
+            _counts = null;
+            OverwriteCheck.IsEnabled = false;
+            DiscardButton.IsEnabled = false;
+            UpdateCommitEnabled();
+        }
+
+        // Commit only makes sense when it would write something: New rows, or Conflict rows we will overwrite.
+        private void UpdateCommitEnabled()
+        {
+            var newRows = _counts?.GetValueOrDefault(RowStatus.New) ?? 0;
+            var conflicts = _counts?.GetValueOrDefault(RowStatus.Conflict) ?? 0;
+            CommitButton.IsEnabled = _batchId is not null &&
+                (newRows > 0 || (OverwriteCheck.IsChecked == true && conflicts > 0));
+        }
+
+        private void OverwriteCheck_Changed(object sender, RoutedEventArgs e) => UpdateCommitEnabled();
+
+        private async void CommitButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_batchId is not { } id) return;
+
+            var overwrite = OverwriteCheck.IsChecked == true;
+            CommitButton.IsEnabled = false;
+            DiscardButton.IsEnabled = false;
+            ChooseButton.IsEnabled = false;
+            OverwriteCheck.IsEnabled = false;
+            StageProgress.IsIndeterminate = true;
+            StageProgress.Visibility = Visibility.Visible;
+            StageText.Text = "Committing...";
+
+            try
+            {
+                // Off the UI thread: a big commit can take a while.
+                var result = await Task.Run(async () =>
+                {
+                    await _preview.SetConflictOverwriteAsync(id, overwrite);
+                    return await _preview.CommitAsync(id);
+                });
+
+                StageText.Text = result.Message +
+                    $" ({result.NewRows:N0} new, {result.UpdatedRows:N0} updated, " +
+                    $"{result.SkippedExactDuplicates:N0} exact dup, {result.SkippedFileDuplicates:N0} file dup, " +
+                    $"{result.SkippedConflicts:N0} conflicts skipped, {result.RejectedRows:N0} invalid; " +
+                    $"{result.ElapsedSeconds:F1}s)";
+
+                if (result.Success) ClearBatch();
+            }
+            catch (Exception ex)
+            {
+                StageText.Text = $"Commit failed: {ex.Message}";
+            }
+            finally
+            {
+                StageProgress.Visibility = Visibility.Hidden;
+                StageProgress.IsIndeterminate = false;
+                ChooseButton.IsEnabled = true;
+                if (_batchId is not null)
+                {
+                    DiscardButton.IsEnabled = true;
+                    OverwriteCheck.IsEnabled = true;
+                    UpdateCommitEnabled();
+                }
             }
         }
     }
