@@ -1,9 +1,9 @@
 ---
 title: ExcelSearch Performance Report
-version: 1.1
+version: 1.3
 last_updated: 2026-10-12
 status: current
-scope: Excel import pipeline (parse, stage, classify, commit), invalid-row export and reader latency
+scope: Excel import pipeline (parse, stage, classify, commit), invalid-row export, reader latency, Query screen searches, re-check and conflict paging
 benchmark_file: synthetic workbook, 200,000 rows, TEST_ keys only
 environment: SQL Server Express (.\SQLEXPRESS), single development database, .NET 8, developer PC
 ---
@@ -45,7 +45,10 @@ The single change that mattered most was replacing the Entity Framework row-by-r
 | 7 | `READ_COMMITTED_SNAPSHOT` on, discard/commit locking | Readers do not wait for a commit. Discard cannot race a commit. See 3.3. |
 | 8 | Excel error-cell scan (`ErrorCellScanner`) | A correctness fix with no measurable cost: a byte search of the sheet XML, and the full XML pass only when an error cell exists. |
 | 9 | Invalid-row export with a streaming xlsx writer | 100,000 rows in 6.3 s with flat memory (+13 MB). See 3.4. |
-| 10 | Re-check against the database, per-row conflict details | Set-based, batch-scoped `UPDATE`s in 4,000-row chunks that only write rows that changed. Correct and tested, but not timed. See section 7. |
+| 10 | Re-check against the database, per-row conflict details | Set-based, batch-scoped `UPDATE`s in 4,000-row chunks that only write rows that changed. 1.9 s for a 200,000-row batch against 500,000 existing rows, working set +1 MB. See section 8. |
+| 11 | Query screen: parameterized LINQ search, server-side paging and sorting, separate count and totals queries | First page of 100 in 0.01-0.5 s on 500,000 rows for the everyday searches; count and totals take 0.01-1 s and fill in after the rows. See section 8. |
+| 12 | Sort tie-break follows the sort direction | Default search (newest first, unfiltered) page 2.36 s to 0.01 s, no new index. See section 8. |
+| 13 | Query export in 10,000-row keyset chunks (selected columns or all 28) | 500,000 rows: CSV 12.5 s (+35 MB), xlsx 22.8 s (+25 MB). Memory does not grow with rows. Writing fewer columns only makes the file smaller; it was not timed separately. See section 8. |
 
 ## 3. What changed the numbers, and why
 
@@ -130,6 +133,7 @@ two by row number, so neither side is ever loaded whole. The writer decides whet
 | Classify in SQL | about 6-9 s | medium |
 | Commit | about 17-27 s | largest single database step |
 | Export of 100,000 invalid rows (on demand) | about 6 s | not part of an import run |
+| Query: first page of results (500,000 rows) | 0.01-0.5 s | not part of an import run; see section 8 |
 
 ## 5. Options not taken yet
 
@@ -152,20 +156,58 @@ dotnet test src/ExcelSearch.Tests --logger "console;verbosity=detailed"
 ```
 
 The output reports parse, load, classify, commit and reader-latency timings, plus working-set growth, for the
-large tests in `StagingStoreTests.cs` and `CommitTests.cs`, and the export timing and memory from `ExportDbTests.cs`.
+large tests in `StagingStoreTests.cs` and `CommitTests.cs`, the export timing and memory from `ExportDbTests.cs`, and
+the search, query-export, re-check and conflict-paging timings from `QueryLargeTests.cs` (it seeds 500,000 rows, takes about
+5 minutes, and also writes its report to `%TEMP%\ExcelSearch_query_large_report.txt`).
 The tests use unique `TEST_` keys and delete only their own rows afterwards.
 
 ## 7. Known gaps in this report
 
 - The first EF measurement (766 rows/s) was a single run; the controlled baseline is the 705 rows/s row.
 - Classify with and without range chunking was never timed.
+- The search timings (section 8) are single-user. They were taken on a table of 501,090 rows; behaviour at several million rows is extrapolated, not measured (the "contains" name search is a scan and grows with the table).
 - Numbers come from one machine and one database instance; run-to-run noise is 10-25%.
-- No search performance is reported yet, because the search feature does not exist.
-- **Not timed:** `RefreshAgainstDatabaseAsync` on a large batch (it was only tested for correctness, including a
-  4,500-row multi-chunk case), the conflict-details page query, and the export at sizes other than 100,000 rows with
-  the new writer. The MiniExcel growth figures at 20,000 and 50,000 rows come from a throwaway probe.
+- **Not timed:** the RegNo / ChequeInstNo / AccountNo search filters (section 8), and the export of invalid rows at sizes other than 100,000 rows. The MiniExcel growth figures at 20,000 and 50,000 rows come from a throwaway probe.
 - The 7.8 s parse figure is lower than the earlier 13-14 s. Nothing in the parser was made faster in between, so treat
   it as machine and run-to-run variation until it is re-measured under the same conditions.
+
+## 8. Query screen searches, re-check and conflict paging (500,000 rows)
+
+Measured by `QueryLargeTests` (`EXCELSEARCH_RUN_LARGE=1`): 500,000 synthetic rows committed through the normal stage and
+commit path (5 batches of 100,000: load 5-12 s, classify 3-7 s, commit 13-20 s each), 501,090 rows in `Transactions` in
+all. Seconds, after the tie-break fix described below; "all three" runs page, count and totals at once, as the screen does.
+
+| Search | Matching rows | Page (100) | Count | Totals | All three | Warm repeat |
+|---|---:|---:|---:|---:|---:|---:|
+| Date range (one month) | 7,750 | 0.17 | 0.02 | 0.12 | 0.07 | 0.07 |
+| Exact CNIC | 1 | 1.50 (first call: plan compile) | 0.01 | 0.01 | 0.00 | 0.00 |
+| Application no starts with | 10,000 | 0.07 | 0.03 | 0.68 | 0.71 | 0.65 |
+| Customer name contains | 8,424 | 0.10 | 1.03 | 0.96 | 1.35 | 1.10 |
+| Bank + project | 1,667 | 0.53 | 0.38 | 0.38 | 0.51 | 0.59 |
+| Credit between | 20,010 | 0.11 | 0.24 | 0.24 | 0.26 | 0.26 |
+| Date range + bank + customer contains | 0 | 0.45 | 0.87 | 0.84 | 1.10 | 1.03 |
+| Unfiltered, ValueDate newest first (default) | 501,090 | 0.01 | 0.28 | 0.40 | 0.40 | 0.48 |
+| Unfiltered, CustomerName | 501,090 | 0.01 | 0.15 | 0.45 | 0.43 | 0.41 |
+| (extra) Unfiltered, Credit | 501,090 | 1.75 | 0.13 | 0.39 | 1.98 | 1.89 |
+| (extra) 500,000-row result | 500,000 | 0.01 | 2.36 | 2.73 | 3.11 | 3.18 |
+
+- **Biggest win: tie-break direction.** The first run had the default search (unfiltered, newest first) at 2.36 s for the page.
+  The `ORDER BY` was `ValueDate DESC, PayOrderNo ASC, TxnRefSeqNo ASC`, but the `ValueDate` index holds the key columns
+  ascending, so reading it backwards gives `PayOrderNo DESC` and SQL Server sorted all 500,000 rows. Making the tie-break
+  follow the sort direction lets it read the index backwards and stop after 100 rows: **2.36 s to 0.01 s** with no new
+  index. Sorting by `CustomerName` already matched the index and was 0.01 s.
+- Still slow (about 2 s or more): sorting an unindexed column over everything (Credit, 1.75 s page), and a result of
+  500,000 rows (count and totals 2.4-2.7 s: they must read every row). Customer name "contains" is a scan (about 1 s, grows
+  with the table). Proposals, none applied, are in `Scripts/db/005_query_indexes.sql`.
+- Memory: the searches never grew the working set by more than 17 MB. Exporting all 500,000 rows: CSV 12.5 s (40,104 rows/s,
+  141 MB file, +35 MB); xlsx 22.8 s (21,887 rows/s, 90 MB file, +25 MB): flat, as with the invalid-row export.
+- Dropdown lists (distinct values): 0.2-0.5 s each; cached by the service.
+- A running search is cancelled 0.02 s after its token fires.
+- **Re-check and conflict paging** on a 200,000-row batch (180,000 conflicts, 20,000 identical) against the 500,000 existing rows:
+  stage + classify 18 s; `RefreshAgainstDatabaseAsync` 1.9 s with nothing changed and 1.9 s when 20,000 rows had changed
+  (working set +1 MB); `GetConflictPageAsync` 0.11 s (page 1), 0.13 s (page 500), 0.34 s (page 1,800), working set +1-2 MB.
+  The "Re-check" gap listed in section 7 is therefore closed for this size.
+- Not timed: RegNo / ChequeInstNo / AccountNo filters (no index of their own), and the search with several concurrent users.
 
 ## Version history
 
@@ -173,3 +215,5 @@ The tests use unique `TEST_` keys and delete only their own rows afterwards.
 |---|---|---|
 | 1.0 | 2026-10-12 | First report: EF to `SqlBulkCopy`, commit step, `READ_COMMITTED_SNAPSHOT`, reader latency during commit. |
 | 1.1 | 2026-10-12 | Added the invalid-row export (MiniExcel replaced by a streaming writer: +213 MB to +13 MB), the error-cell scan cost, and the not-yet-timed re-check. |
+| 1.2 | 2026-10-12 | Added section 8: Query screen search timings at 500,000 rows, the tie-break fix (2.36 s to 0.01 s), export memory, re-check and conflict paging at 200,000 rows. |
+| 1.3 | 2026-10-12 | Stage list extended (11-13: Query screen, tie-break fix, query export), "where the time goes" and reproduction steps now cover the Query tests, known-gaps list updated. Numbers unchanged from 1.2. |

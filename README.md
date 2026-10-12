@@ -2,41 +2,51 @@
 
 A Windows desktop app (WPF) for importing bank-transaction Excel sheets into SQL Server and searching them.
 
-**Status: early scaffold.** The solution structure, database schema, EF Core model and dependency injection are in place. The only screen is a button that counts rows in `Transactions` to prove the database connection works. Excel import and the search/filter screen are not built yet.
+**Status: working.** Two screens are built and tested:
+
+- **Import** - choose an `.xlsx`, see exactly what would happen (new rows, rows already in the database, conflicts, repeats inside the file, invalid rows), choose which conflicts overwrite the database, re-check against the database, export the invalid rows, then commit or discard. Files of 200,000+ rows are handled (streamed, staged in SQL Server, classified in SQL).
+- **Query** - search the imported transactions: date range, customer name, CNIC, application / pay order / reference numbers (starts-with or exact), bank / project / dealer / branch / data-source lists, amount ranges and import batch. Server-side paging and sorting, totals for the whole result, row details with the import it came from, and export to Excel or CSV (selected columns or all 28 fields).
 
 ## Solution layout
 
 ```
 ExcelSearch.sln
 src/
-├── ExcelSearch/        WPF app (UI, DI host, appsettings)
-├── ExcelSearch.Core/   class library: Excel import logic (ClosedXML) - not implemented yet
-└── ExcelSearch.Data/   class library: EF Core model (AppDbContext, entities)
-Scripts/db/             T-SQL schema script
-Samples/                example Excel files
-db.md                   database schema documentation and change history
+├── ExcelSearch/         WPF app: MVVM (CommunityToolkit.Mvvm), views, theme, DI host, appsettings
+├── ExcelSearch.Core/    class library: Excel parser (ExcelDataReader), staging and query interfaces, filters, exporters
+├── ExcelSearch.Data/    class library: EF Core model, SQL Server staging store, SQL Server query service
+└── ExcelSearch.Tests/   xUnit tests (net8.0-windows so it can reference the WPF project)
+Scripts/
+├── db/                  T-SQL: 001-004 numbered scripts, init_db.sql (all of them in one), 005 (draft indexes, not applied)
+├── run/                 launcher scripts (run.ps1, run-dev.cmd, run-release.cmd)
+└── samples/             make_samples.py - generates the sample workbooks
+Samples/                 original bank-format examples; Samples/test/ holds the generated test workbooks and a manual checklist
+docs/Performance.md      performance report (import pipeline, search, export)
+db.md                    database schema documentation and change history
+AGENTS.md                guidance for coding agents (CLAUDE.md points to it)
 ```
 
-The WPF project references Core and Data. Core and Data do not reference the WPF project.
+The WPF project references Core and Data. Core and Data never reference the WPF project.
 
 ## Tech stack
 
-- .NET 8 (`net8.0-windows` for the app, `net8.0` for the libraries)
-- WPF, with `Microsoft.Extensions.Hosting` for configuration and dependency injection
-- Entity Framework Core 8 (SQL Server)
-- ClosedXML (Excel reading, in Core)
-- CommunityToolkit.Mvvm (referenced, not used yet)
+- .NET 8 (`net8.0-windows` for the app and tests, `net8.0` for the libraries)
+- WPF with MVVM (CommunityToolkit.Mvvm), `Microsoft.Extensions.Hosting` for configuration and dependency injection
+- Entity Framework Core 8 and `SqlBulkCopy` (SQL Server)
+- ExcelDataReader (reading `.xlsx`); a small forward-only writer for exports (ClosedXML is used in the tests only)
+- xUnit
 
 ## Prerequisites
 
 - Windows
 - .NET 8 SDK (or newer; the target stays .NET 8)
-- SQL Server (the project was set up against SQL Server Express 2022)
-- `dotnet-ef` tool only if you want to re-scaffold the model: `dotnet tool install --global dotnet-ef`
+- SQL Server (set up against SQL Server Express 2022). The database must have `READ_COMMITTED_SNAPSHOT` on; `init_db.sql` does that.
+- `dotnet-ef` only to re-scaffold the model: `dotnet tool install --global dotnet-ef`
+- Python with `openpyxl` only to regenerate the sample workbooks
 
 ## Getting started
 
-1. **Create the database.** Create an empty database named `ExcelSearch`, then run `Scripts/db/001_create_tables.sql` against it. The script is safe to re-run: it only creates tables that do not exist. See [db.md](db.md) for the schema.
+1. **Create the database.** Run `Scripts/db/init_db.sql` (for example in SSMS or `sqlcmd`). It creates the `ExcelSearch` database if it is missing, then all tables, indexes and the RCSI setting. It is safe to re-run. Edit the database name on the lines marked `<<< EDIT` if you want another one. Close other connections first: the RCSI step disconnects other sessions. The numbered scripts `001`-`004` are the same thing in steps, kept as history. See [db.md](db.md) for the schema.
 2. **Configure the connection string.** Settings files live in `src/ExcelSearch/`:
 
    | File | In git? | Used when |
@@ -46,46 +56,56 @@ The WPF project references Core and Data. Core and Data do not reference the WPF
    | `appsettings.Production.json` | no (gitignored) | Release builds |
    | `*.json.example` | yes | Templates to copy |
 
-   Copy `appsettings.Development.json.example` to `appsettings.Development.json` (and the Production one likewise) and fill in your server, user and password. The key is `ConnectionStrings:DefaultConnection`. Never commit the real files.
+   Copy `appsettings.Development.json.example` to `appsettings.Development.json` (and the Production one likewise) and fill in your server, user and password. The key is `ConnectionStrings:DefaultConnection`. An optional top-level `CommitLockTimeoutSeconds` (default 120) sets how long a commit waits for another commit. Never commit the real files.
 3. **Build and run.**
    ```
    dotnet build ExcelSearch.sln
    dotnet run --project src/ExcelSearch
    ```
-   Click **Count Transactions**. A fresh database shows `Transactions rows: 0`. If the connection fails, the label shows the error (a down server can take about 15 seconds to time out).
+   or use `Scripts\run\run-dev.cmd` / `run-release.cmd`. If the connection fails, the screen shows the error (a down server can take about 15 seconds to time out).
 
 Debug builds run in the `Development` environment; any other build defaults to `Production`.
 
+## Trying it with sample data
+
+`Samples/test/` has generated workbooks for every case the Import screen handles (all new, invalid rows, duplicates and conflicts, repeats, missing header, large file for paging, ...) and `10_query_demo_3000_rows.xlsx` for the Query screen. `Samples/test/README.md` lists what each file does, the expected counts, and a manual checklist for both screens. Committing a sample writes real rows to the database you point the app at. Regenerate them with `python Scripts/samples/make_samples.py` (or `... 10` for just the query demo).
+
+## Tests
+
+```
+dotnet test src/ExcelSearch.Tests
+```
+
+Database tests run against the single development database from the same configuration as the app. Every test uses unique `TEST_<guid>` keys, scopes its work to its own import batch, and deletes only the rows it created. `EXCELSEARCH_SKIP_DB_TESTS=1` skips them; the large tests (200,000-row import, 500,000-row Query run) also need `EXCELSEARCH_RUN_LARGE=1` and print their timings. Results are summarized in [docs/Performance.md](docs/Performance.md).
+
 ## Database model
 
-Two tables: `ImportBatches` (one row per imported file) and `Transactions` (one row per Excel data row).
+Three tables: `ImportBatches` (one row per imported file), `Transactions` (one row per Excel data row) and `ImportStaging` (rows of a file that has been loaded but not yet committed).
 
 - The primary key of `Transactions` is the business key **(PayOrderNo, TxnRefSeqNo)**, so a duplicate row is rejected by the database.
-- `Transactions.Id` is a separate unique GUID supplied by the app.
+- `Transactions.Id` is a separate unique GUID filled by a column default.
 - Each row stores a `RowHash` (SHA-256 of the business columns) so an import can tell an exact duplicate (same key, same hash) from a conflict (same key, different hash).
-- Identifiers such as CNIC and account numbers are stored as text so leading zeros survive.
+- Identifiers such as CNIC and account numbers are stored as text so leading zeros survive; `Cnic` is digits only.
+- Commits are serialized with an application lock; discard and commit cannot race.
 
 Full column list, indexes and history: [db.md](db.md).
 
 ## Re-scaffolding the EF Core model
 
-If the schema changes, regenerate the entities from the live database (replace the connection string with yours):
+If the schema changes, update the numbered script, `init_db.sql` and [db.md](db.md), then regenerate the entities from the live database (replace the connection string with yours):
 
 ```
 dotnet ef dbcontext scaffold "<connection string>" Microsoft.EntityFrameworkCore.SqlServer ^
   --project src/ExcelSearch.Data --startup-project src/ExcelSearch ^
   --context AppDbContext --context-dir . --output-dir Entities ^
   --namespace ExcelSearch.Data.Entities --context-namespace ExcelSearch.Data ^
-  --table dbo.ImportBatches --table dbo.Transactions --no-onconfiguring --force
+  --table dbo.ImportBatches --table dbo.Transactions --table dbo.ImportStaging --no-onconfiguring --force
 ```
-
-Then update [db.md](db.md).
 
 ## Notes
 
-- The app registers `AppDbContext` as transient (a desktop app has no request scope), so each window gets its own context.
-- `Samples/` holds example workbooks showing the expected Excel column headers.
-
+- `AppDbContext` is registered through `AddDbContextFactory` (a desktop app has no request scope); each operation creates its own short-lived context.
+- Index ideas for larger data sets are in `Scripts/db/005_query_indexes.sql`. It is a draft: every statement is commented out and nothing in it has been applied.
 
 ## Credits
 

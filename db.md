@@ -1,5 +1,5 @@
 # ExcelSearch Database Schema
-Version: 1.30 | Last Updated: 2026-10-09
+Version: 1.31 | Last Updated: 2026-10-12
 Database: ExcelSearch
 Server: LOCAL
 
@@ -10,7 +10,7 @@ Server: LOCAL
     4. Cross-reference api.txt/api.md (if it exists) wherever a table is directly exposed/managed via a REST endpoint
 ---
 
-Source of truth for the structure: `Scripts/db/001_create_tables.sql` (re-runnable; creates a table only if it does not exist). EF Core entities in `src/ExcelSearch.Data` are scaffolded from this schema. Collation: `SQL_Latin1_General_CP1_CI_AS` (case-insensitive).
+Source of truth for the structure: `Scripts/db/001_create_tables.sql`, then `002`, `003` and `004` (each re-runnable). `Scripts/db/init_db.sql` joins 001-004 into one re-runnable script that also creates the database if it is missing; use it to build a fresh database. `005_query_indexes.sql` is a draft and is not part of the schema. EF Core entities in `src/ExcelSearch.Data` are scaffolded from this schema. Collation: `SQL_Latin1_General_CP1_CI_AS` (case-insensitive).
 
 ## Relationships
 - `Transactions.ImportBatchId` → `ImportBatches.Id` (`FK_Transactions_ImportBatches`, no cascade)
@@ -49,7 +49,7 @@ One row per Excel data row.
 
 - 2026-10-08: Created by `001_create_tables.sql`.
 - 2026-10-08: Primary key is the business key (PayOrderNo, TxnRefSeqNo), both required text. Chosen so a duplicate key is rejected by the database itself (error 2627), not only by import code.
-- 2026-10-08: `Id` (GUID) is a spare surrogate: unique, supplied by the app, NOT the PK. If real data turns out to have gaps or non-unique key pairs, promote Id to PK and demote the pair to a normal index.
+- 2026-10-08: `Id` (GUID) is a spare surrogate: unique, NOT the PK (filled by the column default, see the column table). If real data turns out to have gaps or non-unique key pairs, promote Id to PK and demote the pair to a normal index.
 - 2026-10-08: Identifiers (account no, CNIC, refs…) are text because Excel mixes numbers and strings, values can exceed INT range, and leading zeros must survive. Amounts are decimal(18,2).
 - 2026-10-08: Because the collation is case-insensitive, keys differing only by case (`ab1` / `AB1`) count as the same key, and trailing spaces are ignored in comparisons.
 
@@ -59,7 +59,7 @@ Keys and tracking
 |---|---|---|---|---|
 | PayOrderNo | nvarchar(50) | NOT NULL | | PK part 1. Excel: `payorder no`. |
 | TxnRefSeqNo | nvarchar(50) | NOT NULL | | PK part 2. Excel: `Txn Ref/ Seq No`. |
-| Id | uniqueidentifier | NOT NULL | newsequentialid() | Unique (`UQ_Transactions_Id`). The app normally supplies its own GUID. |
+| Id | uniqueidentifier | NOT NULL | newsequentialid() | Unique (`UQ_Transactions_Id`). Filled by the default: the commit insert leaves it out (2026-10-12: corrected; an earlier note said the app supplies it). |
 | ImportBatchId | int | NOT NULL | | FK → ImportBatches.Id. |
 | SourceRowNumber | int | NULL | | Excel row number in the source file. |
 | RowHash | char(64) | NOT NULL | | SHA-256 hex of the normalized business columns. Same key + same hash = exact duplicate (skip); same key + different hash = conflict (user decides). |
@@ -128,3 +128,7 @@ Indexes: `PK_ImportStaging` (clustered, ImportBatchId + ExcelRowNumber); `IX_Imp
 - 2026-10-09: This file expanded from the empty template to document both tables, relationships, indexes and history. Introspected from the live database; structure matches the script exactly. Both tables currently hold 0 rows.
 - 2026-10-09: Ran `002_create_staging.sql`: added `ImportBatches.Status` / `CommittedAt` and created `dbo.ImportStaging` with its keys and indexes. Verified in a rolled-back transaction that a second staging row with the same (ImportBatchId, ExcelRowNumber) fails with error 2627. Re-seeded `ImportBatches` identity to 0 afterwards (the test consumed value 1). Both tables hold 0 rows.
 - 2026-10-09: Ran `003_concurrency.sql`: added `ImportBatches.ImportedBy`, `ImportStaging.ExistingRowHash` and `IX_ImportBatches_Status_ImportedAt`. `READ_COMMITTED_SNAPSHOT` deliberately left OFF (the optional line in the script stays commented). No identity reseed. Integration tests run against this same database using unique `TEST_`-prefixed keys and delete only their own rows (batch ids are consumed, so Ids have gaps). A temporary `ExcelSearch_Test` database was created and dropped the same day.
+- 2026-10-12: `READ_COMMITTED_SNAPSHOT` is now ON (`Scripts/db/004_enable_rcsi.sql`, run by the owner), so the "left OFF" note above is out of date. Readers no longer wait for a large commit: a `COUNT(*)` during a 200,000-row commit returned in 2-62 ms.
+- 2026-10-12: No schema change this day. The Query screen reads `Transactions` only. `Scripts/db/init_db.sql` added: 001-004 in one re-runnable script (creates the database if missing). Not run against the live database; its content equals what 001-004 already created.
+- 2026-10-12: `Scripts/db/005_query_indexes.sql` added as a DRAFT of index proposals with measurements (500,000-row run). Every statement is commented out; no index was created. Existing filter indexes were enough for the measured searches once the sort tie-break was changed in code (docs/Performance.md section 8). If an index is ever added, update 001, `init_db.sql`, the scaffolded model and this file together.
+- 2026-10-12: Test data: the 500,000-row and 200,000-row tests insert `TEST_<guid>` rows and delete them again (chunked, by prefix) in the same run; batch Ids are consumed, so `ImportBatches.Id` has gaps. Manual imports of the sample workbooks (keys like `PO-A-0001`, `PO-Q-0001`) are real rows and stay until deleted by hand.
