@@ -21,7 +21,11 @@ namespace ExcelSearch
         {
             // CreateDefaultBuilder loads appsettings.json plus appsettings.{Environment}.json from the app's
             // base directory. The environment defaults to Production; Debug builds use Development.
+            // The content root is where appsettings*.json are looked for. By default it is the current directory,
+            // which `dotnet run --project src/ExcelSearch` leaves at the repo root (no settings there, so the
+            // connection string came out empty). The settings files are copied next to the exe, so use that.
             _host = Host.CreateDefaultBuilder()
+                .UseContentRoot(AppContext.BaseDirectory)
 #if DEBUG
                 .UseEnvironment(Environments.Development)
 #endif
