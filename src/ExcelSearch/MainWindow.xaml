@@ -18,6 +18,10 @@
             <views:ImportView />
         </DataTemplate>
 
+        <DataTemplate DataType="{x:Type vm:QueryViewModel}">
+            <views:QueryView />
+        </DataTemplate>
+
         <!-- Navigation entry: a green bar on the left marks the active screen. -->
         <Style x:Key="NavItem" TargetType="ListBoxItem">
             <Setter Property="Foreground" Value="{StaticResource InkMutedBrush}" />
@@ -80,7 +84,7 @@
 
                 <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource InkSoftBrush}" Margin="0,0,0,10" />
 
-                <!-- Items whose ViewModel is null (Query, for now) are disabled and cannot be selected. -->
+                <!-- Items whose ViewModel is null (none right now) are disabled and cannot be selected. -->
                 <ListBox x:Name="NavList" ItemsSource="{Binding NavItems}" SelectedItem="{Binding SelectedNavItem, Mode=TwoWay}"
                          Background="Transparent" BorderThickness="0" ItemContainerStyle="{StaticResource NavItem}"
                          AutomationProperties.AutomationId="NavList" />

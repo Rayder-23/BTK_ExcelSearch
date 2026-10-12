@@ -478,4 +478,163 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="8" />
     </Style>
+
+    <!-- ===== Query screen: filter inputs ===== -->
+    <Style x:Key="FilterLabel" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+        <Setter Property="Margin" Value="1,0,0,4" />
+    </Style>
+
+    <!-- Rounded text box with a green outline while it has the keyboard focus. -->
+    <Style x:Key="FilterTextBox" TargetType="TextBox">
+        <!-- Grows (up to about four lines) and wraps instead of hiding the end of a long value; hovering shows the whole text. -->
+        <Setter Property="MinHeight" Value="34" />
+        <Setter Property="MaxHeight" Value="96" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
+        <Setter Property="Padding" Value="8,3" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="Background" Value="White" />
+        <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="SelectionBrush" Value="{StaticResource SelectedBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" SnapsToDevicePixels="True">
+                        <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="#B9B7A9" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource GreenBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.5" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="Text" Value="">
+                <Setter Property="ToolTipService.IsEnabled" Value="False" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style x:Key="FilterDatePicker" TargetType="DatePicker">
+        <Setter Property="Height" Value="34" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
+    <!-- The little "exact" switch inside a text filter: off = starts with (default), on = whole value. -->
+    <Style x:Key="ModeToggle" TargetType="ToggleButton">
+        <Setter Property="FontSize" Value="10.5" />
+        <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Bd" Background="#EEEDE6" CornerRadius="4" Padding="6,2">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#E0DFD5" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource GreenBrush}" />
+                            <Setter Property="Foreground" Value="White" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Closed multi-select dropdown: looks like a filter box with a caret. -->
+    <Style x:Key="DropdownButton" TargetType="ToggleButton">
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Bd" Background="White" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="6"
+                            Padding="9,0,8,0" SnapsToDevicePixels="True">
+                        <DockPanel>
+                            <Path DockPanel.Dock="Right" Data="M0,0 L8,0 L4,5 Z" Fill="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            <ContentPresenter VerticalAlignment="Center" />
+                        </DockPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="#B9B7A9" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource GreenBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- "More filters" expander: a text link with a turning caret instead of the stock arrow. -->
+    <Style x:Key="MoreFilters" TargetType="Expander">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Expander">
+                    <DockPanel>
+                        <ToggleButton DockPanel.Dock="Top" IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                      Focusable="False" Cursor="Hand" HorizontalAlignment="Left">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <StackPanel Orientation="Horizontal" Background="Transparent" Margin="0,2">
+                                        <Path x:Name="Caret" Data="M0,0 L5,4 L0,8 Z" Fill="{StaticResource GreenBrush}" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5" />
+                                        <TextBlock x:Name="Label" Text="More filters" Margin="8,0,0,0" FontWeight="SemiBold" FontSize="13.5"
+                                                   Foreground="{StaticResource GreenBrush}" />
+                                    </StackPanel>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="Caret" Property="RenderTransform">
+                                                <Setter.Value><RotateTransform Angle="90" /></Setter.Value>
+                                            </Setter>
+                                            <Setter TargetName="Label" Property="Text" Value="Fewer filters" />
+                                        </Trigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Label" Property="Foreground" Value="{StaticResource GreenDarkBrush}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ContentPresenter x:Name="Content" Visibility="Collapsed" Margin="0,10,0,0" />
+                    </DockPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsExpanded" Value="True">
+                            <Setter TargetName="Content" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Sort hint on the Query grid: the sort runs on the server over the whole result, not just the visible page. -->
+    <Style x:Key="QueryColumnHeader" TargetType="DataGridColumnHeader" BasedOn="{StaticResource LedgerColumnHeader}">
+        <Setter Property="ToolTip" Value="Click to sort the whole result" />
+    </Style>
 </ResourceDictionary>

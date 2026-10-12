@@ -1,10 +1,12 @@
 using System.Windows;
 using ExcelSearch.Core.Export;
 using ExcelSearch.Core.Import;
+using ExcelSearch.Core.Query;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Data;
 using ExcelSearch.Services;
 using ExcelSearch.ViewModels;
+using CommunityToolkit.Mvvm.Messaging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,8 +55,13 @@ namespace ExcelSearch
                     services.AddSingleton<IInvalidRowSource>(sp => sp.GetRequiredService<IStagingStore>());
                     services.AddSingleton<IInvalidRowExporter, InvalidRowExporter>();
 
+                    // One query service for the whole app: it also owns the cached dropdown values.
+                    services.AddSingleton<ITransactionQueryService, SqlTransactionQueryService>();
+                    services.AddSingleton<IMessenger>(WeakReferenceMessenger.Default);
+
                     // ViewModels (one long-lived instance each: the shell shows the same import screen state) and the window.
                     services.AddSingleton<ImportViewModel>();
+                    services.AddSingleton<QueryViewModel>();
                     services.AddSingleton<ShellViewModel>();
 
                     services.AddTransient<MainWindow>();

@@ -1,0 +1,16 @@
+<UserControl x:Class="ExcelSearch.Views.TextFilterBox"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- DataContext is a TextFilterInput. The label and the "exact" switch share the line above the box, so the box itself
+         is full width and nothing sits on top of the text. -->
+    <StackPanel>
+        <DockPanel Margin="1,0,0,4">
+            <ToggleButton DockPanel.Dock="Right" Content="exact" IsChecked="{Binding Exact, Mode=TwoWay}" Style="{StaticResource ModeToggle}"
+                          ToolTip="Off: the value starts with what you typed. On: the whole value must match exactly." />
+            <TextBlock Text="{Binding Label}" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
+        </DockPanel>
+        <TextBox Style="{StaticResource FilterTextBox}" Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
+                 AutomationProperties.Name="{Binding Label}" />
+    </StackPanel>
+</UserControl>

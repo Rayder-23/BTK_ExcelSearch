@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 using ExcelSearch.Core.Export;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Services;
@@ -24,15 +25,17 @@ public partial class ImportViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly IInvalidRowExporter _exporter;
     private readonly ILogger<ImportViewModel>? _logger;
+    private readonly IMessenger _messenger;
     private string? _sourcePath;   // the workbook that was chosen, needed to export its invalid rows later
 
     public ImportViewModel(IImportPreviewService service, IDialogService dialogs, IInvalidRowExporter exporter,
-        ILogger<ImportViewModel>? logger = null)
+        ILogger<ImportViewModel>? logger = null, IMessenger? messenger = null)
     {
         _service = service;
         _dialogs = dialogs;
         _exporter = exporter;
         _logger = logger;
+        _messenger = messenger ?? WeakReferenceMessenger.Default;
     }
 
     // ---- state the view binds to -------------------------------------------------------------------------
@@ -297,6 +300,7 @@ public partial class ImportViewModel : ObservableObject
             {
                 LastCommit = result;
                 BatchId = null;   // committed: nothing left to discard
+                _messenger.Send(new ImportCommittedMessage(id));   // the Query screen refreshes its dropdown lists
                 State = ImportState.Done;
                 return;
             }

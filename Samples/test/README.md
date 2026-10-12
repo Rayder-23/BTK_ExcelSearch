@@ -1,13 +1,13 @@
 ---
 title: Sample workbooks for trying the import screen
-version: 1.0
+version: 1.1
 last_updated: 2026-10-12
 generator: Scripts/samples/make_samples.py
 ---
 
 # Sample workbooks
 
-Files `01`-`09` in this folder (`Samples/test/`) are made by `python Scripts/samples/make_samples.py` (needs `pip install openpyxl`; output is
+Files `01`-`10` in this folder (`Samples/test/`) are made by `python Scripts/samples/make_samples.py` (needs `pip install openpyxl`; output is
 deterministic). The two `software filed ...` files in the parent `Samples/` folder are the original bank-format examples and are not generated.
 `SampleFilesTests` (parse-only, no database) checks the row counts below.
 
@@ -27,6 +27,7 @@ rows" in the app yet, so commit only what you are happy to leave there (or delet
 | `06_large_for_paging.xlsx` | 1,420 | **New 1,050 (11 pages), Repeated in file 120 (2 pages), Invalid 250 (3 pages)** | Paging: Previous/Next, "Page x of y", the loading overlay, scrolling. Commit and re-stage it to see Already in database 1,050 (11 pages). |
 | `07_not_really_excel.xlsx` | - | **Rejected**: not a readable workbook | A text file with an `.xlsx` name. |
 | `08_header_on_row_4_variant_headers.xlsx` | 10 | **New 10** | Three title lines above the header, and header spellings `PAYORDER NO`, `txn_ref_seq_no`, `value date`, `Dealer Name`, `Narration1`. First data row is Excel row 5. |
+| `10_query_demo_3000_rows.xlsx` | 3,000 | **New 3,000** | Data for the **Query screen**: two years of dates, 8 banks, 6 projects, 12 dealers, about 260 customers, plus rows made to be found (see the Query checklist). Keys `PO-Q-0001`..`PO-Q-3000` and `PO-Q-NEEDLE`. `python Scripts/samples/make_samples.py 10` regenerates just this file. |
 | `../software filed (only columns).xlsx` | 0 | Zero rows | The headers-only edge case: Commit stays disabled. |
 
 ## The two-step run (Already in database + Conflicts)
@@ -83,3 +84,64 @@ rows to the development database (see the warning above).
 5. Fallback, missing file: copy `02` to a temp folder, stage the copy, delete the copy, export. The message says the original file was not found and the parsed values were exported (same columns, still with Source Row and Errors).
 6. Fallback, changed file: stage a copy of `02`, open the copy in Excel, change a cell and save, then export: the message says the file has changed since it was imported.
 7. Cancel: the save dialog's Cancel does nothing. (The mid-export Cancel button only shows for large exports; it is covered by tests.)
+
+## Manual checklist: the Query screen
+
+**Seed data:** stage and **commit** `10_query_demo_3000_rows.xlsx` (3,000 new rows; skip this if it is already committed). Files `01` and
+`06` add more rows if you commit them too. Every step below adds the filter **Pay order no = `PO-Q-`** (starts with) so the answers
+stay the same whatever else is in the database; the "Pay order no" box is one of the common filters in the filter drawer on the left.
+
+**1. Search and totals**
+1. Click **Query** in the left list. The **filter drawer** is open on the left and the grid area says "Set your filters and press Search".
+2. Type `PO-Q-` in *Pay order no* and press **Search** (or press **Enter** in the box). The drawer folds away so the results get the full width (the **Filters (1)** button at the top reopens it, and
+   a green chip `Pay order no: PO-Q-` shows what is applied). Rows appear first, newest first (the first row is `Edge Last Day`, 31/12/2024);
+   the slim bar at the bottom then fills in: Credit **3,020,692,192.00**, Debit **6,388,848.10**, Down payment **203,305,569.31**, and **3,000 rows**
+   in green at its right end. "Page 1 of 30".
+3. Change *Rows* (bottom right) to 50 ("Page 1 of 60"), 200 ("of 15"), 500 ("of 6"). The totals do not change, and the grid goes back to page 1.
+4. **Next** / **Previous** move between pages; Previous is disabled on page 1, Next on the last page. The totals stay the same on every page (they cover the whole result).
+
+**2. Filters** (each one together with `PO-Q-` in *Pay order no*; press **Clear** between them). Inputs are full width; a long value wraps onto more
+lines (try a 60-character customer name) and shows in full when you hover. The little **exact** switch sits on the label line. Click the **x** on a chip to
+remove just that filter (it searches again); **Clear all** removes them all. Untick "Hide filters after searching" to keep the drawer open.
+| Filter | Expected |
+|---|---|
+| Customer name contains `needle` (any case) | 1 row, `Needle Customer`, `PO-Q-NEEDLE`, Credit 123,456.78, date 29/02/2024 |
+| CNIC `42101-9999999-9` (typed with dashes), switch **exact** on | the same 1 row; with **exact** off it still finds it |
+| CNIC starts with `42101100` | 768 rows |
+| Application no `NEEDLE` (starts with) | 1 row. Application no `00045` (exact on or off) finds only `PO-Q-0509` (its number is the text `00045`, zeros kept) |
+| Pay order no exactly `PO-Q-NEEDLE` (exact on) | 1 row |
+| Value date from 01/01/2024 to 31/03/2024 | 378 rows |
+| Value date from = to = 01/01/2023 | includes `Edge First Day`; from = to = 31/12/2024 includes `Edge Last Day` (both ends are inclusive) |
+| *More filters*: Bank = HBL | 376 rows |
+| Bank = HBL and Project = Bahria Paradise | 126 rows |
+| Bank = HBL and UBL (tick two) | 751 rows; the box says "2 selected" |
+| Credit between 10000 and 20000 | 16 rows, including the two rows with exactly 10,000.00 and 20,000.00 but not 9,999.99 or 20,000.01 |
+| Customer contains `khan` | 191 rows |
+| Customer contains `100%` / `_` / `O'Brien` | 1 row each (`100% Cotton_Mills`, the same row, `O'Brien & Sons "Traders"`): `%` and `_` are plain text, not wildcards |
+| Cheque / inst no `000123` (exact) | 1 row (`PO-Q-0509`); leading zeros are kept |
+| Import batch no = the number shown in a row's details | all rows of that import |
+
+**3. Sorting** (server-side: the whole result is re-sorted, not just the page)
+1. With `PO-Q-` searched, click the **Credit** header: a green up arrow, smallest credit first, back on page 1. Click again: down arrow, largest first (about 2,000,000).
+2. Go to page 2: the order continues from page 1 (no row repeats). Click **Customer**: alphabetical, page 1, arrow moves to Customer. Rows with the same value keep a stable order when you page.
+
+**4. Details panel**
+1. Click any row: its details open **under the row** across the width of the grid (all 28 fields in groups) and **Imported from** (file `10_query_demo_3000_rows.xlsx`, the Excel row, who imported, when, the batch number).
+2. Click `PO-Q-0508` (Customer-name sort or Pay order no filter): *Narration 1* shows two lines (the comma and line break). Click ✕ in the details to close.
+
+**5. Export** (with `PO-Q-` searched: 3,000 rows)
+1. Click **Export results** (top right). The save dialog offers *Excel workbook* and *CSV*. Save as `.xlsx`; the message banner says "Exported 3,000 rows" and offers to open the folder.
+2. Open it: a bold header, one column per ticked column (12 by default; choose *All columns* for all 28), 3,000 rows, dates as real dates, CNIC and `000123` as text with their zeros. The rows are in Pay order no order, not the grid's sort.
+3. Export again as CSV: open it in Notepad. `PO-Q-0508`'s narration is in quotes and spans two lines. (Excel itself shows `000123` as 123 in a CSV: that is Excel's CSV behaviour; use the .xlsx for that column.)
+4. Only rows matching the filters on screen are exported, not just the current page: search *Bank = HBL* and export: 376 rows.
+
+**5b. Columns and what an export writes** - click **Columns** (top right): 12 everyday columns are ticked (all 28 fields are listed, the rest hidden); tick *Account no* or *Narration 1* and the column appears; untick *Dealer* and it goes. **All** ticks everything, **Default** goes back to the 12. The first two columns (Value date, Pay order no) stay in place while you scroll sideways.
+1. Next to **Export results** the box says **Selected columns** (the default). Search `PO-Q-`, untick *Dealer* and *Project*, tick *Narration 1*, export to .xlsx: the file has exactly the ticked columns, in grid order, for every matching row (3,000), not just the page.
+2. Switch the box to **All columns** and export again: all 28 fields, whatever is ticked.
+3. Untick every column with the box on *Selected columns*: **Export results** is disabled and the hint says "Tick at least one column to export."; with *All columns* it works again.
+
+**6. Messages and clearing**
+1. Type `abc` in a Credit box and press Search: a red message under the filters; nothing is searched. Set a *from* date after the *to* date: another message.
+2. Search for `zzzz` in Customer name: "No transactions match these filters." in the grid; **Export** is disabled.
+3. Click **Clear**: all filters empty, the grid back to the prompt. The sort order and rows-per-page stay as you set them.
+4. A banner (for example after an export) has a ✕ and never goes away on its own.

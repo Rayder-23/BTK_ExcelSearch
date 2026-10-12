@@ -117,6 +117,9 @@ internal sealed class FakeDialogs : IDialogService
     public string? PickExcelFile() { Picks++; return FileToPick; }
     public string? PickSavePath(string suggestedName) { SuggestedSaveName = suggestedName; return SaveToPick; }
     public void OpenFolder(string filePath) => OpenedFolders.Add(filePath);
+    public ExportTarget? ExportTargetToPick { get; set; }
+    public List<(string Name, bool AllowExcel)> ExportPicks { get; } = new();
+    public ExportTarget? PickExportPath(string suggestedName, bool allowExcel) { ExportPicks.Add((suggestedName, allowExcel)); return ExportTargetToPick; }
     public bool Confirm(string title, string message) { ConfirmMessages.Add(message); return ConfirmAnswer; }
     public DialogChoice AskYesNoCancel(string title, string message) => ChoiceAnswer;
     public void ShowInfo(string title, string message) => Infos.Add(message);

@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ExcelSearch.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- appsettings.json, appsettings.Development.json, appsettings.Production.json (the *.example templates are not copied) -->
     <None Update="appsettings*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
