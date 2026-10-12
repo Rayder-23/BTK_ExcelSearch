@@ -78,4 +78,13 @@ public sealed class ImportPreviewService : IImportPreviewService
 
     public Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, CancellationToken ct = default) =>
         _store.GetConflictPageAsync(batchId, pageNumber, pageSize, ct);
+
+    public Task<IReadOnlyDictionary<RowStatus, int>> GetCountsAsync(int batchId, CancellationToken ct = default) =>
+        _store.GetCountsAsync(batchId, ct);
+
+    public Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default) =>
+        _store.GetConflictCountsAsync(batchId, ct);
+
+    public Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default) =>
+        _store.RefreshAgainstDatabaseAsync(batchId, ct);
 }

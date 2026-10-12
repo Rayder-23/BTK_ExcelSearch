@@ -85,7 +85,7 @@ public class LargeFileTests
     /// Writes a minimal .xlsx by hand, row by row straight into the zip, so generating the test file
     /// does not itself use much memory (text is stored inline, no shared-strings table).
     /// </summary>
-    internal static void WriteSyntheticWorkbook(string path, int rows, string keyPrefix = "")
+    internal static void WriteSyntheticWorkbook(string path, int rows, string keyPrefix = "", bool invalidEveryOther = false)
     {
         string[] headers =
         {
@@ -124,7 +124,8 @@ public class LargeFileTests
         {
             var r = i + 1;
             w.Write($"<row r=\"{r}\">");
-            w.Write(Str(0, r, $"{1 + i % 28:00}/{1 + i % 12:00}/2024"));
+            if (!(invalidEveryOther && i % 2 == 0))   // an empty Value Date makes the row invalid
+                w.Write(Str(0, r, $"{1 + i % 28:00}/{1 + i % 12:00}/2024"));
             w.Write(Str(1, r, "0" + (i % 90)));
             w.Write(Str(2, r, "Branch " + i % 90));
             w.Write(Str(3, r, "Customer " + i));

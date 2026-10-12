@@ -1,4 +1,5 @@
 using System.Windows;
+using ExcelSearch.Core.Export;
 using ExcelSearch.Core.Import;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Data;
@@ -49,6 +50,8 @@ namespace ExcelSearch
                     services.AddSingleton<ImportPreviewService>();
                     services.AddSingleton<IImportPreviewService>(sp => sp.GetRequiredService<ImportPreviewService>());
                     services.AddSingleton<IDialogService, WpfDialogService>();
+                    services.AddSingleton<IInvalidRowSource>(sp => sp.GetRequiredService<IStagingStore>());
+                    services.AddSingleton<IInvalidRowExporter, InvalidRowExporter>();
 
                     // ViewModels (one long-lived instance each: the shell shows the same import screen state) and the window.
                     services.AddSingleton<ImportViewModel>();

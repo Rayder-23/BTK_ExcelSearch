@@ -28,7 +28,13 @@
         <Border Grid.Row="0" Background="{StaticResource AmberTintBrush}" BorderBrush="{StaticResource AmberBrush}"
                 BorderThickness="4,0,0,0" CornerRadius="4" Padding="16,12" Margin="0,0,0,18"
                 Visibility="{Binding HasMessage, Converter={StaticResource BoolToVis}}" AutomationProperties.AutomationId="MessageBanner">
-            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="14" Foreground="{StaticResource TextBrush}" LineHeight="21" />
+            <!-- Stays until the user closes it (no timer): messages can arrive after a long unattended import. -->
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding DismissMessageCommand}" Style="{StaticResource BannerCloseButton}"
+                        VerticalAlignment="Top" Margin="12,-2,-6,0" ToolTip="Dismiss" AutomationProperties.Name="Dismiss message"
+                        AutomationProperties.AutomationId="DismissMessageButton" />
+                <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="14" Foreground="{StaticResource TextBrush}" LineHeight="21" />
+            </DockPanel>
         </Border>
 
         <!-- Each state is a panel; only the current state's panel is visible. -->
@@ -86,11 +92,18 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,14">
-                    <TextBlock Text="{Binding FileName}" Style="{StaticResource Heading}" FontSize="24" AutomationProperties.AutomationId="PreviewFileName" />
-                    <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Bottom" Margin="16,0,0,4"
-                               Text="{Binding TotalRows, StringFormat={}{0:N0} rows read from the file}" />
-                </StackPanel>
+                <DockPanel Grid.Row="0" Margin="0,0,0,14">
+                    <!-- Others may have imported since this preview was made: compare the rows with the database again. -->
+                    <Button DockPanel.Dock="Right" Content="Re-check against database" Command="{Binding RefreshCommand}"
+                            VerticalAlignment="Center" Style="{StaticResource SecondaryButton}"
+                            ToolTip="Compare the staged rows with the database as it is now and update the counts"
+                            AutomationProperties.AutomationId="RefreshButton" />
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding FileName}" Style="{StaticResource Heading}" FontSize="24" AutomationProperties.AutomationId="PreviewFileName" />
+                        <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Bottom" Margin="16,0,0,4"
+                                   Text="{Binding TotalRows, StringFormat={}{0:N0} rows read from the file}" />
+                    </StackPanel>
+                </DockPanel>
 
                 <!-- Summary cards: the colour says what happens to those rows. -->
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,16">
@@ -131,10 +144,23 @@
                 <DockPanel Grid.Row="3" Margin="0,18,0,0" LastChildFill="False">
                     <Button DockPanel.Dock="Right" Content="{Binding CommitButtonText}" Command="{Binding CommitCommand}"
                             Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="CommitButton" />
-                    <Button DockPanel.Dock="Right" Content="Start over" Command="{Binding StartOverCommand}" Margin="0,0,12,0"
-                            Style="{StaticResource SecondaryButton}" AutomationProperties.AutomationId="StartOverButton" />
                     <Button DockPanel.Dock="Right" Content="Discard" Command="{Binding DiscardCommand}" Margin="0,0,12,0"
                             Style="{StaticResource SecondaryButton}" AutomationProperties.AutomationId="DiscardButton" />
+
+                    <!-- Left side: the export of the Invalid tab (button, then progress while it runs). -->
+                    <Button DockPanel.Dock="Left" Content="Export invalid rows..." Command="{Binding ExportInvalidCommand}"
+                            Visibility="{Binding IsInvalidTabSelected, Converter={StaticResource BoolToVis}}"
+                            Style="{StaticResource DangerButton}" AutomationProperties.AutomationId="ExportInvalidButton" />
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center"
+                                Visibility="{Binding IsExporting, Converter={StaticResource BoolToVis}}">
+                        <ProgressBar Width="200" Maximum="{Binding InvalidCount}" Value="{Binding ExportedRows}" VerticalAlignment="Center" />
+                        <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" FontFamily="{StaticResource MonoFont}" FontSize="12.5"
+                                   Foreground="{StaticResource MutedBrush}" AutomationProperties.AutomationId="ExportProgressText">
+                            <Run Text="{Binding ExportedRows, Mode=OneWay, StringFormat=N0}" /><Run Text=" of " /><Run Text="{Binding InvalidCount, Mode=OneWay, StringFormat=N0}" /><Run Text=" rows" />
+                        </TextBlock>
+                        <Button Content="Cancel" Command="{Binding ExportInvalidCancelCommand}" Margin="12,0,0,0"
+                                Style="{StaticResource PagerButton}" AutomationProperties.AutomationId="CancelExportButton" />
+                    </StackPanel>
                 </DockPanel>
             </Grid>
 

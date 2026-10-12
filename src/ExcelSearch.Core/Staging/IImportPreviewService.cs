@@ -25,4 +25,12 @@ public interface IImportPreviewService
 
     /// <summary>One page (1-based) of Conflict rows with what differs from the row already in the database.</summary>
     Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, CancellationToken ct = default);
+
+    Task<IReadOnlyDictionary<RowStatus, int>> GetCountsAsync(int batchId, CancellationToken ct = default);
+
+    /// <summary>Conflict totals (all conflicts, and how many will overwrite) straight from the database.</summary>
+    Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default);
+
+    /// <summary>Re-checks the batch against the database; refused (not thrown) if it is not 'Staged'.</summary>
+    Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default);
 }

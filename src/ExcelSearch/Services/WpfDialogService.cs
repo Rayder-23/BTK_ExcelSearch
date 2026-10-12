@@ -15,6 +15,30 @@ public sealed class WpfDialogService : IDialogService
         return ok == true ? dialog.FileName : null;
     }
 
+    public string? PickSavePath(string suggestedName)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Filter = "Excel workbook (*.xlsx)|*.xlsx",
+            Title = "Save the invalid rows",
+            FileName = suggestedName,
+            DefaultExt = ".xlsx",
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        var ok = Owner is { } owner ? dialog.ShowDialog(owner) : dialog.ShowDialog();
+        return ok == true ? dialog.FileName : null;
+    }
+
+    public void OpenFolder(string filePath)
+    {
+        // explorer.exe /select,"<file>" opens the folder with the file highlighted.
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{filePath}\"")
+        {
+            UseShellExecute = true,
+        });
+    }
+
     public bool Confirm(string title, string message) =>
         Show(title, message, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
 

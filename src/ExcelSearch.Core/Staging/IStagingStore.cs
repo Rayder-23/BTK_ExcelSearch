@@ -57,7 +57,7 @@ public sealed record LoadResult(int RowsLoaded, TimeSpan Elapsed)
 /// Staging-table operations. EVERY method is scoped by batch id, so several users can stage and discard
 /// different batches at the same time without touching each other's rows.
 /// </summary>
-public interface IStagingStore
+public interface IStagingStore : IInvalidRowSource
 {
     /// <summary>Creates an ImportBatches row with Status 'Staged' and returns its id.</summary>
     Task<int> CreateBatchAsync(string fileName, string? sheetName, string fileHash, string? importedBy,
@@ -111,4 +111,13 @@ public interface IStagingStore
     /// so the screen can show exactly what differs.
     /// </summary>
     Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, CancellationToken ct = default);
+
+    /// <summary>How many Conflict rows the batch has and how many are set to overwrite, read from the database.</summary>
+    Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Re-compares the batch's New, Already-in-database and Conflict rows with Transactions as it is now (other users may have
+    /// committed since the preview). Only for a 'Staged' batch; otherwise a refusal is returned. Invalid and repeated-in-file rows are not touched.
+    /// </summary>
+    Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default);
 }

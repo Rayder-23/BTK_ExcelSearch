@@ -1,4 +1,5 @@
 using System.Data.Common;
+using ExcelSearch.Core.Export;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Services;
 using ExcelSearch.ViewModels;
@@ -46,8 +47,34 @@ internal sealed class FakeImportPreviewService : IImportPreviewService
         return Task.FromResult(new PagedConflicts(new[] { ConflictFor(pageNumber) }, Counts.GetValueOrDefault(RowStatus.Conflict)));
     }
 
-    public Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite, IReadOnlyCollection<int>? excelRowNumbers = null, CancellationToken ct = default)
-        => Task.FromResult(0);
+    /// <summary>Every SetConflictOverwriteAsync call: (batch, overwrite, row numbers or null for "all").</summary>
+    public List<(int Batch, bool Overwrite, int[]? Rows)> OverwriteCalls { get; } = new();
+    public Func<Task>? OnSetOverwrite { get; set; }
+
+    /// <summary>What the "database" says about how many conflicts are set to overwrite.</summary>
+    public int OverwriteInDb { get; set; }
+
+    public async Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite, IReadOnlyCollection<int>? excelRowNumbers = null, CancellationToken ct = default)
+    {
+        OverwriteCalls.Add((batchId, overwrite, excelRowNumbers?.ToArray()));
+        if (OnSetOverwrite is not null) await OnSetOverwrite();
+        return 1;
+    }
+
+    public Task<IReadOnlyDictionary<RowStatus, int>> GetCountsAsync(int batchId, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyDictionary<RowStatus, int>>(new Dictionary<RowStatus, int>(Counts));
+
+    public Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default) =>
+        Task.FromResult(new ConflictCounts(Counts.GetValueOrDefault(RowStatus.Conflict), OverwriteInDb));
+
+    public Func<RefreshResult> OnRefresh { get; set; } = () => new RefreshResult(true, null, Array.Empty<StatusMove>());
+    public int Refreshes { get; private set; }
+
+    public Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default)
+    {
+        Refreshes++;
+        return Task.FromResult(OnRefresh());
+    }
 
     public Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default)
     {
@@ -83,19 +110,39 @@ internal sealed class FakeDialogs : IDialogService
     public List<string> Errors { get; } = new();
     public int Picks { get; private set; }
 
+    public string? SaveToPick { get; set; } = @"C:\out\sample_errors.xlsx";
+    public string? SuggestedSaveName { get; private set; }
+    public List<string> OpenedFolders { get; } = new();
+
     public string? PickExcelFile() { Picks++; return FileToPick; }
+    public string? PickSavePath(string suggestedName) { SuggestedSaveName = suggestedName; return SaveToPick; }
+    public void OpenFolder(string filePath) => OpenedFolders.Add(filePath);
     public bool Confirm(string title, string message) { ConfirmMessages.Add(message); return ConfirmAnswer; }
     public DialogChoice AskYesNoCancel(string title, string message) => ChoiceAnswer;
     public void ShowInfo(string title, string message) => Infos.Add(message);
     public void ShowError(string title, string message) => Errors.Add(message);
 }
 
+internal sealed class FakeExporter : IInvalidRowExporter
+{
+    public Func<string, int, string, CancellationToken, Task<ExportResult>> OnExport { get; set; } =
+        (_, _, dest, _) => Task.FromResult(new ExportResult(true, 5, ExportMode.SourceFile, null, dest));
+    public List<(string Source, int Batch, string Destination)> Calls { get; } = new();
+
+    public Task<ExportResult> ExportAsync(string sourcePath, int batchId, string destinationPath, IProgress<int>? progress, CancellationToken ct = default)
+    {
+        lock (Calls) Calls.Add((sourcePath, batchId, destinationPath));
+        return OnExport(sourcePath, batchId, destinationPath, ct);
+    }
+}
+
 public class ImportViewModelTests
 {
     private readonly FakeImportPreviewService _service = new();
     private readonly FakeDialogs _dialogs = new();
+    private readonly FakeExporter _exporter = new();
 
-    private ImportViewModel Create() => new(_service, _dialogs);
+    private ImportViewModel Create() => new(_service, _dialogs, _exporter);
 
     private async Task<ImportViewModel> StagedAsync(int @new = 3, int conflict = 2)
     {
@@ -202,9 +249,10 @@ public class ImportViewModelTests
         await vm.CommitCommand.ExecuteAsync(null);
 
         var summary = Assert.Single(_dialogs.ConfirmMessages);
-        Assert.Contains("3 new rows", summary);
-        Assert.Contains("2 conflicts will be skipped", summary);
-        Assert.Contains("1 invalid rows will not be imported", summary);
+        Assert.Contains("insert 3 new rows", summary);
+        Assert.Contains("overwrite 0 existing rows", summary);
+        Assert.Contains("skip 11 rows", summary);                 // 2 conflicts + 4 already in database + 5 repeated in file
+        Assert.Contains("not import 1 invalid rows", summary);
         Assert.Equal(7, Assert.Single(_service.Commits));
         Assert.Equal(ImportState.Done, vm.State);
         Assert.Equal(3, vm.LastCommit!.NewRows);
@@ -231,7 +279,7 @@ public class ImportViewModelTests
     }
 
     [Fact]
-    public async Task Commit_failure_RowsChangedSincePreview_tells_the_user_to_start_over()
+    public async Task Commit_failure_RowsChangedSincePreview_offers_the_recheck()
     {
         var vm = await StagedAsync();
         _service.OnCommit = _ => Task.FromResult(new CommitResult(false, CommitFailure.RowsChangedSincePreview, "Rows changed."));
@@ -240,7 +288,7 @@ public class ImportViewModelTests
 
         Assert.Equal(ImportState.Preview, vm.State);
         Assert.Contains("Rows changed.", vm.Message);
-        Assert.Contains("Start over", vm.Message);
+        Assert.Contains("Re-check against database", vm.Message);   // offers the re-check
     }
 
     [Fact]
@@ -300,33 +348,6 @@ public class ImportViewModelTests
 
         Assert.Equal("Batch 7 was already committed, so it cannot be discarded.", Assert.Single(_dialogs.Infos));
         Assert.Equal(ImportState.Idle, vm.State);
-    }
-
-    [Fact]
-    public async Task Start_over_discards_then_opens_the_file_chooser_again()
-    {
-        var vm = await StagedAsync();
-        Assert.Equal(1, _dialogs.Picks);
-
-        await vm.StartOverCommand.ExecuteAsync(null);
-
-        Assert.Equal(7, Assert.Single(_service.Discards));
-        Assert.Equal(2, _dialogs.Picks);
-        Assert.Equal(2, _service.StagedPaths.Count);
-        Assert.Equal(ImportState.Preview, vm.State);   // the fake stages the new file straight away
-    }
-
-    [Fact]
-    public async Task Start_over_declined_changes_nothing()
-    {
-        var vm = await StagedAsync();
-        _dialogs.ConfirmAnswer = false;
-
-        await vm.StartOverCommand.ExecuteAsync(null);
-
-        Assert.Empty(_service.Discards);
-        Assert.Equal(1, _dialogs.Picks);
-        Assert.Equal(ImportState.Preview, vm.State);
     }
 
     [Fact]
@@ -447,6 +468,292 @@ public class ImportViewModelTests
         Assert.All(vm.Tabs.Where(t => t.Status != RowStatus.Conflict), t => Assert.False(t.ShowsDetails));
         var invalid = vm.Tabs.Single(t => t.Status == RowStatus.Invalid);
         Assert.Equal("Error", invalid.Columns[1].Header);   // ErrorText right after the row number
+    }
+
+    // ---- feature 1: conflict overwrite choices -----------------------------------------------------------
+
+    private async Task<(ImportViewModel Vm, StatusTabViewModel Conflicts)> ConflictTabAsync(int @new = 3, int conflict = 5)
+    {
+        var vm = await StagedAsync(@new, conflict);
+        var conflicts = vm.Tabs.Single(t => t.Status == RowStatus.Conflict);
+        vm.SelectedTab = conflicts;
+        await WaitForAsync(() => conflicts.IsLoaded);
+        return (vm, conflicts);
+    }
+
+    [Fact]
+    public async Task Toggling_a_conflicts_overwrite_saves_it_for_that_one_row_and_reads_the_count_from_the_database()
+    {
+        var (vm, conflicts) = await ConflictTabAsync();
+        var row = conflicts.Rows.Single();
+        Assert.False(row.IsOverwrite);
+
+        _service.OverwriteInDb = 1;           // what the database will report after the save
+        row.IsOverwrite = true;
+        await conflicts.LastUpdate;
+
+        var call = Assert.Single(_service.OverwriteCalls);
+        Assert.Equal((7, true), (call.Batch, call.Overwrite));
+        Assert.Equal(new[] { row.Row.ExcelRowNumber }, call.Rows);       // only that row, not "all"
+        Assert.Equal(1, vm.OverwriteCount);
+        Assert.Equal("1 of 5 conflicts will overwrite", conflicts.OverwriteSummary);
+    }
+
+    [Fact]
+    public async Task Untoggling_saves_false_and_a_failed_save_puts_the_checkbox_back_and_shows_an_error()
+    {
+        var (vm, conflicts) = await ConflictTabAsync();
+        var row = conflicts.Rows.Single();
+
+        _service.OnSetOverwrite = () => throw new InvalidOperationException("save failed");
+        row.IsOverwrite = true;
+        await conflicts.LastUpdate;
+
+        Assert.False(row.IsOverwrite);                                    // reverted to what is really saved
+        Assert.Contains("save failed", Assert.Single(_dialogs.Errors));
+        Assert.Equal(0, vm.OverwriteCount);
+    }
+
+    [Fact]
+    public async Task Overwrite_all_and_Skip_all_use_null_row_numbers_and_reload_the_page()
+    {
+        var (vm, conflicts) = await ConflictTabAsync(conflict: 250);
+        var loadsBefore = _service.PageRequests.Count(r => r.Status == RowStatus.Conflict);
+
+        _service.OverwriteInDb = 250;
+        await conflicts.OverwriteAllCommand.ExecuteAsync(null);
+        Assert.Equal((7, true, (int[]?)null), _service.OverwriteCalls[^1]);
+        Assert.Equal(250, vm.OverwriteCount);                             // from the database, not from the 1 row on screen
+        Assert.Equal("250 of 250 conflicts will overwrite", conflicts.OverwriteSummary);
+
+        _service.OverwriteInDb = 0;
+        await conflicts.SkipAllCommand.ExecuteAsync(null);
+        Assert.Equal((7, false, (int[]?)null), _service.OverwriteCalls[^1]);
+        Assert.Equal(0, vm.OverwriteCount);
+
+        Assert.Equal(loadsBefore + 2, _service.PageRequests.Count(r => r.Status == RowStatus.Conflict));   // page re-read each time
+    }
+
+    [Fact]
+    public async Task Overwrite_flag_from_the_database_is_shown_in_the_checkbox()
+    {
+        _service.ConflictFor = n => new ConflictRow(
+            new StagedRow { ExcelRowNumber = n, Status = RowStatus.Conflict, PayOrderNo = "PO", TxnRefSeqNo = "T", Overwrite = true },
+            new[] { new FieldChange("Debit", "1.00", "2.00", true) });
+
+        var (_, conflicts) = await ConflictTabAsync();
+
+        Assert.True(conflicts.Rows.Single().IsOverwrite);
+        Assert.Empty(_service.OverwriteCalls);                            // loading a ticked row must not save anything
+    }
+
+    [Theory]
+    [InlineData(0, 0, "Import 0 new rows", false)]
+    [InlineData(3, 0, "Import 3 new rows", true)]
+    [InlineData(0, 2, "Import 0 new, update 2", true)]
+    [InlineData(3, 2, "Import 3 new, update 2", true)]
+    public async Task Commit_button_text_and_enabling_follow_new_and_overwrite_counts(int @new, int overwrite, string text, bool enabled)
+    {
+        _service.OverwriteInDb = overwrite;                               // the preview reads M from the database
+        var vm = await StagedAsync(@new, conflict: 4);
+
+        Assert.Equal(text, vm.CommitButtonText);
+        Assert.Equal(enabled, vm.CommitCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task Confirmation_lists_insert_overwrite_skip_and_reject_with_the_right_numbers()
+    {
+        _service.OverwriteInDb = 2;
+        var vm = await StagedAsync(@new: 3, conflict: 5);                 // 5 conflicts, 4 exact, 5 repeated, 1 invalid
+
+        await vm.CommitCommand.ExecuteAsync(null);
+
+        var text = Assert.Single(_dialogs.ConfirmMessages);
+        Assert.Contains("insert 3 new rows", text);
+        Assert.Contains("overwrite 2 existing rows", text);
+        Assert.Contains("skip 12 rows", text);                            // (5 - 2) conflicts + 4 + 5
+        Assert.Contains("not import 1 invalid rows", text);
+    }
+
+    // ---- feature 2: re-check against the database ---------------------------------------------------------
+
+    [Fact]
+    public async Task Recheck_reloads_the_counts_and_tabs_and_shows_what_moved()
+    {
+        var vm = await StagedAsync(@new: 12, conflict: 0);
+        _service.Counts[RowStatus.Invalid] = 1;
+        _service.OnRefresh = () =>
+        {
+            // someone else imported meanwhile: 10 New became Already in database, 2 became Conflicts
+            _service.Counts[RowStatus.New] = 0;
+            _service.Counts[RowStatus.ExactDuplicate] = 14;
+            _service.Counts[RowStatus.Conflict] = 2;
+            _service.OverwriteInDb = 0;
+            return new RefreshResult(true, null, new[]
+            {
+                new StatusMove(RowStatus.New, RowStatus.ExactDuplicate, 10),
+                new StatusMove(RowStatus.New, RowStatus.Conflict, 2),
+            });
+        };
+        vm.SelectedTab = vm.Tabs.Single(t => t.Status == RowStatus.ExactDuplicate);
+        var oldTabs = vm.Tabs.ToList();
+
+        Assert.True(vm.RefreshCommand.CanExecute(null));
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, _service.Refreshes);
+        Assert.Equal((0, 2, 14), (vm.NewCount, vm.ConflictCount, vm.ExactDuplicateCount));
+        Assert.Equal("12 rows changed: 10 New → Already in database, 2 New → Conflict.", vm.Message);
+        Assert.False(vm.CommitCommand.CanExecute(null));                  // nothing new left, no overwrites chosen
+        Assert.NotSame(oldTabs[0], vm.Tabs[0]);                           // the tabs were rebuilt from the new counts
+        Assert.Equal(RowStatus.ExactDuplicate, vm.SelectedTab!.Status);   // and the user stays on the tab they were on
+        Assert.False(vm.IsBusy);
+    }
+
+    [Fact]
+    public async Task Recheck_with_no_changes_says_so_and_a_refusal_shows_its_reason()
+    {
+        var vm = await StagedAsync();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+        Assert.StartsWith("Nothing changed", vm.Message);
+
+        _service.OnRefresh = () => RefreshResult.Refused("Batch 7 is 'Committed', not 'Staged', so it can no longer be re-checked.");
+        await vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Contains("'Committed'", vm.Message);
+        Assert.Equal(3, vm.NewCount);                                     // counts untouched by a refusal
+    }
+
+    [Fact]
+    public async Task Recheck_is_only_available_in_Preview()
+    {
+        var vm = Create();
+        Assert.False(vm.RefreshCommand.CanExecute(null));                 // Idle
+
+        await vm.ChooseFileCommand.ExecuteAsync(null);
+        Assert.True(vm.RefreshCommand.CanExecute(null));                  // Preview
+    }
+
+    // ---- feature 3: export invalid rows ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Export_asks_for_a_save_path_named_after_the_file_and_reports_success_with_open_folder()
+    {
+        var vm = await StagedAsync();
+        _exporter.OnExport = (_, _, dest, _) => Task.FromResult(new ExportResult(true, 12, ExportMode.SourceFile, null, dest));
+
+        Assert.True(vm.ExportInvalidCommand.CanExecute(null));
+        await vm.ExportInvalidCommand.ExecuteAsync(null);
+
+        Assert.Equal("sample_errors.xlsx", _dialogs.SuggestedSaveName);
+        var call = Assert.Single(_exporter.Calls);
+        Assert.Equal((@"C:\data\sample.xlsx", 7, @"C:\out\sample_errors.xlsx"), (call.Source, call.Batch, call.Destination));
+        Assert.Contains("Exported 12 invalid rows", vm.Message);
+        Assert.Equal(@"C:\out\sample_errors.xlsx", Assert.Single(_dialogs.OpenedFolders));
+        Assert.False(vm.IsExporting);
+        Assert.Equal(ImportState.Preview, vm.State);
+    }
+
+    [Fact]
+    public async Task Export_does_not_open_the_folder_when_declined_and_shows_the_fallback_note()
+    {
+        var vm = await StagedAsync();
+        _dialogs.ConfirmAnswer = false;
+        _exporter.OnExport = (_, _, dest, _) => Task.FromResult(new ExportResult(true, 3, ExportMode.StagedValues,
+            "The original file \"sample.xlsx\" has changed since it was imported, so the values read at import time were exported.", dest));
+
+        await vm.ExportInvalidCommand.ExecuteAsync(null);
+
+        Assert.Empty(_dialogs.OpenedFolders);
+        Assert.Contains("has changed since it was imported", vm.Message);   // the user is told which mode was used
+    }
+
+    [Fact]
+    public async Task Cancelling_the_save_dialog_exports_nothing()
+    {
+        var vm = await StagedAsync();
+        _dialogs.SaveToPick = null;
+
+        await vm.ExportInvalidCommand.ExecuteAsync(null);
+
+        Assert.Empty(_exporter.Calls);
+        Assert.False(vm.IsExporting);
+    }
+
+    [Fact]
+    public async Task Export_failure_shows_an_error_dialog_and_keeps_the_preview()
+    {
+        var vm = await StagedAsync();
+        _exporter.OnExport = (_, _, _, _) => throw new IOException("disk full");
+
+        await vm.ExportInvalidCommand.ExecuteAsync(null);   // must not throw
+
+        Assert.Contains("disk full", Assert.Single(_dialogs.Errors));
+        Assert.False(vm.IsExporting);
+        Assert.Equal(ImportState.Preview, vm.State);
+        Assert.Empty(_dialogs.OpenedFolders);
+    }
+
+    [Fact]
+    public async Task Export_can_be_cancelled_while_running()
+    {
+        var vm = await StagedAsync();
+        var started = new TaskCompletionSource();
+        _exporter.OnExport = async (_, _, dest, ct) =>
+        {
+            started.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+            return new ExportResult(true, 1, ExportMode.SourceFile, null, dest);
+        };
+
+        var running = vm.ExportInvalidCommand.ExecuteAsync(null);
+        await started.Task;
+        Assert.True(vm.IsExporting);
+        Assert.False(vm.CommitCommand.CanExecute(null));                  // other actions are blocked meanwhile
+        Assert.True(vm.ExportInvalidCancelCommand.CanExecute(null));
+
+        vm.ExportInvalidCancelCommand.Execute(null);
+        await running;
+
+        Assert.False(vm.IsExporting);
+        Assert.Contains("cancelled", vm.Message);
+        Assert.Empty(_dialogs.OpenedFolders);
+        Assert.Empty(_dialogs.Errors);
+    }
+
+    [Fact]
+    public async Task Export_needs_invalid_rows_and_the_button_belongs_to_the_Invalid_tab()
+    {
+        _service.OnStage = (_, _) => Task.FromResult(FakeImportPreviewService.Staged(7, invalid: 0));
+        var vm = Create();
+        await vm.ChooseFileCommand.ExecuteAsync(null);
+        Assert.False(vm.ExportInvalidCommand.CanExecute(null));           // nothing invalid to export
+
+        var vm2 = await StagedAsync();
+        Assert.False(vm2.IsInvalidTabSelected);
+        vm2.SelectedTab = vm2.Tabs.Single(t => t.Status == RowStatus.Invalid);
+        Assert.True(vm2.IsInvalidTabSelected);
+    }
+
+    [Fact]
+    public async Task A_message_stays_until_dismissed_and_dismissing_clears_it()
+    {
+        var vm = await StagedAsync();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        Assert.True(vm.HasMessage);
+        Assert.StartsWith("Nothing changed", vm.Message);
+
+        // Other activity that does not set a new message leaves it in place (nothing clears it behind the user's back).
+        vm.SelectedTab = vm.Tabs.Single(t => t.Status == RowStatus.Invalid);
+        await Task.Delay(200);
+        Assert.True(vm.HasMessage);
+
+        Assert.True(vm.DismissMessageCommand.CanExecute(null));
+        vm.DismissMessageCommand.Execute(null);
+
+        Assert.False(vm.HasMessage);
+        Assert.Null(vm.Message);
     }
 
     // Lets the fire-and-forget first page load finish without sleeping a fixed time.

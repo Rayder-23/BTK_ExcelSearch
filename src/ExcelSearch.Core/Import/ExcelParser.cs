@@ -96,10 +96,39 @@ public sealed class ExcelParser : IExcelParser
         }
     }
 
+    /// <summary>
+    /// Opens the workbook and positions a reader ON the header row of the first sheet that has one (the same rule
+    /// Parse uses). Returns null when there is none. The caller disposes the result. Used by the invalid-row export.
+    /// </summary>
+    internal static SourceSheet? OpenAtHeader(string path, CancellationToken ct)
+    {
+        var stream = OpenRead(path);
+        IExcelDataReader? reader = null;
+        try
+        {
+            reader = ExcelReaderFactory.CreateOpenXmlReader(stream);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                if (TryFindHeader(reader, out var headerRow, out var columns, out _))
+                    return new SourceSheet(reader, stream, headerRow, columns!);
+            } while (reader.NextResult());
+        }
+        catch
+        {
+            reader?.Dispose();
+            stream.Dispose();
+            throw;
+        }
+        reader.Dispose();
+        stream.Dispose();
+        return null;
+    }
+
     private static FileStream OpenRead(string path) =>
         new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize: 81920, FileOptions.SequentialScan);
 
-    private static string HashFile(string path, CancellationToken ct)
+    internal static string HashFile(string path, CancellationToken ct)
     {
         using var fs = OpenRead(path);
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -301,5 +330,31 @@ public sealed class ExcelParser : IExcelParser
         {
             foreach (var item in _items) item.Dispose();
         }
+    }
+}
+
+/// <summary>A workbook reader sitting on its header row, plus the header-to-column map (see ExcelParser.OpenAtHeader).</summary>
+internal sealed class SourceSheet : IDisposable
+{
+    private readonly Stream _stream;
+
+    public SourceSheet(IExcelDataReader reader, Stream stream, int headerRow, Dictionary<string, int> columns)
+    {
+        Reader = reader;
+        _stream = stream;
+        HeaderRow = headerRow;
+        Columns = columns;
+    }
+
+    public IExcelDataReader Reader { get; }
+    public int HeaderRow { get; }
+
+    /// <summary>ImportRow property name (e.g. ValueDate) to 0-based column index.</summary>
+    public Dictionary<string, int> Columns { get; }
+
+    public void Dispose()
+    {
+        Reader.Dispose();
+        _stream.Dispose();
     }
 }
