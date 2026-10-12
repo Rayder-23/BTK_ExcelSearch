@@ -74,7 +74,9 @@ public sealed class ExcelParser : IExcelParser
                 if (TryFindHeader(reader, out var headerRow, out var columns, out var missing))
                 {
                     result.SheetName = reader.Name;
-                    result.Rows = StreamRows(reader, resource, columns!, headerRow, progress, ct);
+                    // ExcelDataReader returns null for cells holding an Excel error (#DIV/0! ...), so find them separately.
+                    var errorCells = ErrorCellScanner.Find(path, reader.Name);
+                    result.Rows = StreamRows(reader, resource, columns!, headerRow, errorCells, progress, ct);
                     return result;
                 }
 
@@ -158,7 +160,8 @@ public sealed class ExcelParser : IExcelParser
 
     /// <summary>Lazy row stream. The finally block releases the file when enumeration ends, fails or is abandoned.</summary>
     private static IEnumerable<ImportRow> StreamRows(IExcelDataReader reader, IDisposable resource,
-        Dictionary<string, int> columns, int headerRow, IProgress<int>? progress, CancellationToken ct)
+        Dictionary<string, int> columns, int headerRow, IReadOnlyDictionary<(int Row, int Col), string> errorCells,
+        IProgress<int>? progress, CancellationToken ct)
     {
         try
         {
@@ -175,6 +178,8 @@ public sealed class ExcelParser : IExcelParser
                 foreach (var (field, col) in columns)
                 {
                     var value = col < reader.FieldCount ? ReadValue(reader.GetValue(col)) : null;
+                    if (value is null && errorCells.Count > 0 && errorCells.TryGetValue((rowNumber, col), out var errorText))
+                        value = new CellErrorMarker($"cell contains an Excel error ({errorText})");
                     if (value is string s && string.IsNullOrWhiteSpace(s)) value = null;
                     if (value is not null) blank = false;
                     raw[field] = value;

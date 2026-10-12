@@ -188,6 +188,32 @@ public class ParserTests : IDisposable
     }
 
     [Fact]
+    public void Cells_holding_an_Excel_error_value_make_the_row_invalid()
+    {
+        var path = Workbook(ws =>
+        {
+            WriteHeaders(ws);
+            for (var r = 2; r <= 4; r++)
+            {
+                ws.Cell(r, Col("Value Date")).Value = new DateTime(2024, 4, 3);
+                ws.Cell(r, Col("payorder no")).Value = "PO" + r;
+                ws.Cell(r, Col("Txn Ref/ Seq No")).Value = "T1";
+            }
+            ws.Cell(2, Col("Debit")).Value = XLError.DivisionByZero;          // a literal error value
+            ws.Cell(3, Col("Run. Bal")).FormulaA1 = "1/0";                     // a formula that evaluates to an error
+            ws.Cell(4, Col("Debit")).Value = 5;                                // a normal row for contrast
+        });
+
+        var rows = Parse(path).Rows;
+        Assert.Equal(3, rows.Count);
+        var literal = rows[0].Errors.Single();
+        Assert.Equal("Debit", literal.Field);
+        Assert.Contains("Excel error (#DIV/0!)", literal.Message);
+        Assert.Equal("RunningBalance", rows[1].Errors.Single().Field);
+        Assert.True(rows[2].IsValid);
+    }
+
+    [Fact]
     public void Missing_required_header_is_a_file_error_and_no_rows_are_parsed()
     {
         var path = Workbook(ws =>
