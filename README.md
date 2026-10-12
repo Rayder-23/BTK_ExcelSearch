@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/ExcelSearch/Assets/logo-512.png" alt="ExcelSearch logo" width="160">
+</p>
+
 # ExcelSearch
 
 A Windows desktop app (WPF) for importing bank-transaction Excel sheets into SQL Server and searching them.
