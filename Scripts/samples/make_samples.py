@@ -194,6 +194,15 @@ def f06_paging() -> list:
     return rows
 
 
+def f09_reimport_of_06() -> list:
+    """The first 250 rows of file 06 with a changed Debit: after 06 is committed these are 250 conflicts (3 pages)."""
+    rng = random.Random(606)
+    rows = [valid_row("F", n, rng) for n in range(1, 251)]
+    for r in rows:
+        r["Debit"] = r["Debit"] + 100
+    return rows
+
+
 def f08_header_not_first() -> tuple:
     rng = random.Random(808)
     rows = [valid_row("H", n, rng) for n in range(1, 11)]
@@ -213,6 +222,7 @@ def main() -> None:
     write("06_large_for_paging.xlsx", f06_paging())
     (OUT / "07_not_really_excel.xlsx").write_text("This is plain text with an .xlsx name, not a workbook.\n", encoding="utf-8")
     print("07_not_really_excel.xlsx: text file")
+    write("09_reimport_of_06_changed_rows.xlsx", f09_reimport_of_06())
     rows, shown = f08_header_not_first()
     # rows are keyed by the original header names; write() puts the renamed headers on row 4 (after 3 title rows)
     write("08_header_on_row_4_variant_headers.xlsx", rows, headers=HEADERS, top_rows=3, header_override=shown)

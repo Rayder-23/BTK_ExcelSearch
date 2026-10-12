@@ -8,6 +8,8 @@ namespace ExcelSearch.Tests;
 /// </summary>
 public class SampleFilesTests
 {
+    internal static string SamplePathFor(string name) => SamplePath(name);
+
     private static string SamplePath(string name)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -118,5 +120,22 @@ public class SampleFilesTests
         Assert.Equal(5, rows[0].ExcelRowNumber);          // Excel's own row number, after 3 title rows + header
         Assert.NotNull(rows[0].DealerName);
         Assert.NotNull(rows[0].Narration1);
+    }
+
+    [Fact]
+    public void File_09_changes_the_first_250_rows_of_file_06_so_they_become_conflicts_once_06_is_committed()
+    {
+        var (big, _) = Parse("06_large_for_paging.xlsx");
+        var (changed, errors) = Parse("09_reimport_of_06_changed_rows.xlsx");
+        Assert.Empty(errors);
+        Assert.Equal(250, changed.Count);
+        Assert.All(changed, r => Assert.True(r.IsValid));
+
+        var byKey = big.Where(r => r.IsValid).GroupBy(r => (r.PayOrderNo, r.TxnRefSeqNo)).ToDictionary(g => g.Key, g => g.First().RowHash);
+        Assert.All(changed, r =>
+        {
+            Assert.True(byKey.ContainsKey((r.PayOrderNo, r.TxnRefSeqNo)), "same key as a row of file 06");
+            Assert.NotEqual(byKey[(r.PayOrderNo, r.TxnRefSeqNo)], r.RowHash);   // but different values
+        });
     }
 }
