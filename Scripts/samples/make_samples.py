@@ -6,6 +6,7 @@ Everything is deterministic (fixed seed), so re-running gives identical files. K
 so a file's rows never collide with another file's, except where a file is meant to overlap (see Samples/README.md).
 """
 import random
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -211,8 +212,81 @@ def f08_header_not_first() -> tuple:
     return rows, headers
 
 
+def f10_query_demo() -> list:
+    """3,000 realistic rows spread over two years for trying the Query screen, plus a few rows built to be found.
+
+    Keys are PO-Q-0001 .. PO-Q-3000 (and PO-Q-NEEDLE). Import this file and commit it; then see the Query checklist
+    in Samples/test/README.md. Expected counts printed by this script are the numbers the checklist quotes.
+    """
+    rng = random.Random(1010)
+    first = ["Ahmed", "Sara", "Bilal", "Ayesha", "Usman", "Fatima", "Hamza", "Zainab", "Imran", "Hina", "Kamran", "Mehwish",
+             "Tariq", "Nadia", "Faisal", "Rabia"]
+    last = ["Khan", "Malik", "Hussain", "Siddiqui", "Tariq", "Noor", "Qureshi", "Ali", "Sheikh", "Raza", "Butt", "Anwar",
+            "Chaudhry", "Mirza", "Baig", "Syed"]
+    banks = BANKS + ["Habib Metro", "Standard Chartered"]
+    projects = PROJECTS + ["Bahria Orchard Lahore", "Bahria Enclave Islamabad"]
+    dealers = DEALERS + ["Metro Estates", "Gulf Properties", "Sunrise Builders", "Landmark Associates",
+                         "Royal Realtors", "Skyline Dealers", "Green Valley Traders", "Pioneer Estates"]
+    sources = ["HBL statement", "Online banking", "Cash office"]
+    rows = []
+    for n in range(1, 3001):
+        r = valid_row("Q", n, rng)
+        credit = round(rng.uniform(5_000, 2_000_000), 2)
+        r.update({
+            "Value Date": datetime(2023, 1, 1) + timedelta(days=(n * 7) % 730),     # 2023-01-01 .. 2024-12-30, ties common
+            "Customer Name": f"{first[n % 16]} {last[(n // 16) % 16]}",
+            "CNIC No": f"42101-{1_000_000 + n * 13:07d}-{n % 9 + 1}",
+            "Reg No": f"{n:05d}",
+            "Bank Name": banks[n % len(banks)],
+            "Project": projects[n % len(projects)],
+            "Delear Name": dealers[n % len(dealers)],
+            "Name of Data": sources[n % len(sources)],
+            "Credit": credit,
+            "Debit": 0 if n % 12 else round(rng.uniform(1_000, 50_000), 2),
+            "Down Payment Amount": round(credit * 0.2, 2) if n % 3 == 0 else None,
+            "Run. Bal": round(5_000_000 - n * 1_500.25, 2),
+        })
+        rows.append(r)
+
+    def special(n, **changes):
+        rows[n - 1].update(changes)
+
+    special(500, **{"payorder no": "PO-Q-NEEDLE", "Customer Name": "Needle Customer", "CNIC No": "42101-9999999-9",
+                    "Application No": "NEEDLE-001", "Credit": 123_456.78, "Debit": 0, "Bank Name": "HBL",
+                    "Value Date": datetime(2024, 2, 29)})                              # a leap day
+    special(501, **{"Customer Name": "O'Brien & Sons \"Traders\""})                    # quote characters
+    special(502, **{"Customer Name": "100% Cotton_Mills"})                             # LIKE wildcards typed as text
+    special(504, Credit=10_000.00, Debit=0)                                            # range edges
+    special(505, Credit=20_000.00, Debit=0)
+    special(506, Credit=9_999.99, Debit=0)
+    special(507, Credit=20_000.01, Debit=0)
+    special(508, **{"Narraction 1": "Paid by cheque, ref 77\nsecond line"})            # comma and line break (CSV export)
+    special(509, **{"Cheque/Inst No": "000123", "Application No": "00045"})            # leading zeros survive as text
+    special(510, **{"Customer Name": "Edge First Day", "Value Date": datetime(2023, 1, 1)})
+    special(511, **{"Customer Name": "Edge Last Day", "Value Date": datetime(2024, 12, 31)})
+
+    c = [r for r in rows]
+    print("  query demo expectations:")
+    print("   rows:", len(c))
+    print("   customer contains 'Needle':", sum("Needle" in r["Customer Name"] for r in c))
+    print("   customer contains 'khan' (any case):", sum("khan" in r["Customer Name"].lower() for r in c))
+    print("   bank = HBL:", sum(r["Bank Name"] == "HBL" for r in c),
+          "| HBL + Bahria Paradise:", sum(r["Bank Name"] == "HBL" and r["Project"] == "Bahria Paradise" for r in c))
+    print("   credit 10,000..20,000 inclusive:", sum(10_000 <= r["Credit"] <= 20_000 for r in c))
+    print("   value date 2024-01-01..2024-03-31:",
+          sum(datetime(2024, 1, 1) <= r["Value Date"] <= datetime(2024, 3, 31) for r in c))
+    print("   sum credit:", round(sum(r["Credit"] for r in c), 2), " sum debit:", round(sum(r["Debit"] for r in c), 2),
+          " sum down payment:", round(sum(r["Down Payment Amount"] or 0 for r in c), 2))
+    return rows
+
+
 def main() -> None:
     OUT.mkdir(exist_ok=True)
+    only = set(sys.argv[1:])     # e.g. `python make_samples.py 10` writes just file 10 (the others stay byte-identical in git)
+    if not only or "10" in only:
+        write("10_query_demo_3000_rows.xlsx", f10_query_demo())
+    if only:
+        return
     write("01_perfect_all_new.xlsx", f01_perfect())
     write("02_invalid_rows.xlsx", f02_invalid())
     write("03_reimport_of_01_duplicates_conflicts.xlsx", f03_reimport_of_01())

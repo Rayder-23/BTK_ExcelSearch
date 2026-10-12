@@ -138,4 +138,37 @@ public class SampleFilesTests
             Assert.NotEqual(byKey[(r.PayOrderNo, r.TxnRefSeqNo)], r.RowHash);   // but different values
         });
     }
+
+    [Fact]
+    public void Query_demo_file_has_3000_valid_rows_and_the_rows_the_query_checklist_looks_for()
+    {
+        var (rows, errors) = Parse("10_query_demo_3000_rows.xlsx");
+        Assert.Empty(errors);
+        Assert.Equal(3000, rows.Count);
+        Assert.All(rows, r => Assert.True(r.IsValid, r.PayOrderNo + ": " + string.Join("; ", r.Errors.Select(e => e.Message))));
+        Assert.Equal(3000, rows.Select(r => (r.PayOrderNo, r.TxnRefSeqNo)).Distinct().Count());
+
+        // The totals the checklist quotes.
+        Assert.Equal(3_020_692_192.00m, rows.Sum(r => r.Credit ?? 0));
+        Assert.Equal(6_388_848.10m, rows.Sum(r => r.Debit ?? 0));
+        Assert.Equal(203_305_569.31m, rows.Sum(r => r.DownPaymentAmount ?? 0));
+
+        Assert.Equal(376, rows.Count(r => r.BankName == "HBL"));
+        Assert.Equal(126, rows.Count(r => r.BankName == "HBL" && r.Project == "Bahria Paradise"));
+        Assert.Equal(191, rows.Count(r => r.CustomerName!.Contains("khan", StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(16, rows.Count(r => r.Credit >= 10_000m && r.Credit <= 20_000m));
+        Assert.Equal(378, rows.Count(r => r.ValueDate >= new DateTime(2024, 1, 1) && r.ValueDate <= new DateTime(2024, 3, 31)));
+
+        var needle = Assert.Single(rows, r => r.PayOrderNo == "PO-Q-NEEDLE");
+        Assert.Equal("Needle Customer", needle.CustomerName);
+        Assert.Equal("421019999999" + "9", needle.Cnic);                  // dashes stripped on import
+        Assert.Equal("NEEDLE-001", needle.ApplicationNo);
+        Assert.Equal(123_456.78m, needle.Credit);
+        Assert.Equal(new DateTime(2024, 2, 29), needle.ValueDate);
+
+        Assert.Equal("O'Brien & Sons \"Traders\"", rows[500].CustomerName);
+        Assert.Equal("100% Cotton_Mills", rows[501].CustomerName);
+        Assert.Equal("000123", rows[508].ChequeInstNo);                 // leading zeros kept (text)
+        Assert.Contains("\n", rows[507].Narration1);
+    }
 }
