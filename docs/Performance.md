@@ -1,9 +1,9 @@
 ---
 title: ExcelSearch Performance Report
-version: 1.0
+version: 1.1
 last_updated: 2026-10-12
 status: current
-scope: Excel import pipeline (parse, stage, classify, commit) and reader latency
+scope: Excel import pipeline (parse, stage, classify, commit), invalid-row export and reader latency
 benchmark_file: synthetic workbook, 200,000 rows, TEST_ keys only
 environment: SQL Server Express (.\SQLEXPRESS), single development database, .NET 8, developer PC
 ---
@@ -26,6 +26,8 @@ them as relative, not absolute. Single runs vary by roughly 10-25% from run to r
 | Commit into `Transactions` | not built | 17-27 s | n/a |
 | Working-set growth while staging | +125 MB | +7 to +48 MB | about 3x less |
 | `SELECT COUNT(*)` on `Transactions` during a commit | not measured | 2-62 ms | does not wait for the commit |
+| Parse alone, with the Excel-error-cell scan added | 13.0-14.2 s | 7.8 s (25,673 rows/s) | no slowdown (the scan is a byte search, run only when needed; the lower figure is also machine noise) |
+| Export 100,000 invalid rows from a 200,000-row file | MiniExcel: 7.3 s, +213 MB | 6.3 s (15,752 rows/s), +13 MB | about 16x less memory, memory no longer grows with rows |
 
 The single change that mattered most was replacing the Entity Framework row-by-row loader with `SqlBulkCopy`
 (section 3.1). Nothing else comes close.
@@ -41,6 +43,9 @@ The single change that mattered most was replacing the Entity Framework row-by-r
 | 5 | **`SqlBulkCopy` loader** | **Load 283.8 s to 16.7 s in the same-day comparison.** See 3.1. |
 | 6 | Commit step (single transaction, application lock, set-based insert/update) | 200,000 new rows committed in 17-27 s. See 3.2. |
 | 7 | `READ_COMMITTED_SNAPSHOT` on, discard/commit locking | Readers do not wait for a commit. Discard cannot race a commit. See 3.3. |
+| 8 | Excel error-cell scan (`ErrorCellScanner`) | A correctness fix with no measurable cost: a byte search of the sheet XML, and the full XML pass only when an error cell exists. |
+| 9 | Invalid-row export with a streaming xlsx writer | 100,000 rows in 6.3 s with flat memory (+13 MB). See 3.4. |
+| 10 | Re-check against the database, per-row conflict details | Set-based, batch-scoped `UPDATE`s in 4,000-row chunks that only write rows that changed. Correct and tested, but not timed. See section 7. |
 
 ## 3. What changed the numbers, and why
 
@@ -97,6 +102,25 @@ commit. That case was not measured, so the "before" figure is an expectation, no
 The discard-versus-commit hardening (conditional `UPDATE` plus `UPDLOCK, HOLDLOCK` on the batch row) is a
 correctness change. In the staggered test the discard waited 1.9 s for a 50,000-row commit and was then refused.
 
+### 3.4 Invalid-row export: why MiniExcel was replaced
+
+The export reads the batch's invalid row numbers in keyset pages of 10,000, streams the source file once and joins the
+two by row number, so neither side is ever loaded whole. The writer decides whether the whole thing stays flat:
+
+| Exported rows | MiniExcel (managed memory growth) | Own `StreamingXlsxWriter` |
+|---|---|---|
+| 20,000 | +49 MB | not measured separately |
+| 50,000 | +79 MB | not measured separately |
+| 100,000 | +141 MB (working set +213 MB) | working set +13 MB |
+
+- **Why MiniExcel grew with the row count:** it opens its zip in update mode, which holds each worksheet in memory until
+  the file is closed, so a 100,000-row export is held as about 90 MB of XML plus overhead. It also rewrote text such as
+  `2024/04/03` when given a date format for a column.
+- **What the replacement does:** a forward-only `ZipArchive` in create mode, with the sheet XML written row by row,
+  text stored inline (no shared-strings table) and a small stylesheet for the date format. Only the current row is held.
+- **Result:** 100,000 rows in 6.3 s (15,752 rows/s), a 9.5 MB file, working set 117 MB to 131 MB, and the file reads
+  back as 100,000 rows with the real parser.
+
 ## 4. Where the time goes now (200,000 rows)
 
 | Step | Time | Share of a stage + commit run |
@@ -105,6 +129,7 @@ correctness change. In the staggered test the discard waited 1.9 s for a 50,000-
 | Bulk insert into staging | about 4 s | small |
 | Classify in SQL | about 6-9 s | medium |
 | Commit | about 17-27 s | largest single database step |
+| Export of 100,000 invalid rows (on demand) | about 6 s | not part of an import run |
 
 ## 5. Options not taken yet
 
@@ -127,8 +152,8 @@ dotnet test src/ExcelSearch.Tests --logger "console;verbosity=detailed"
 ```
 
 The output reports parse, load, classify, commit and reader-latency timings, plus working-set growth, for the
-large tests in `StagingStoreTests.cs` and `CommitTests.cs`. The tests use unique `TEST_` keys and delete only their
-own rows afterwards.
+large tests in `StagingStoreTests.cs` and `CommitTests.cs`, and the export timing and memory from `ExportDbTests.cs`.
+The tests use unique `TEST_` keys and delete only their own rows afterwards.
 
 ## 7. Known gaps in this report
 
@@ -136,9 +161,15 @@ own rows afterwards.
 - Classify with and without range chunking was never timed.
 - Numbers come from one machine and one database instance; run-to-run noise is 10-25%.
 - No search performance is reported yet, because the search feature does not exist.
+- **Not timed:** `RefreshAgainstDatabaseAsync` on a large batch (it was only tested for correctness, including a
+  4,500-row multi-chunk case), the conflict-details page query, and the export at sizes other than 100,000 rows with
+  the new writer. The MiniExcel growth figures at 20,000 and 50,000 rows come from a throwaway probe.
+- The 7.8 s parse figure is lower than the earlier 13-14 s. Nothing in the parser was made faster in between, so treat
+  it as machine and run-to-run variation until it is re-measured under the same conditions.
 
 ## Version history
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-10-12 | First report: EF to `SqlBulkCopy`, commit step, `READ_COMMITTED_SNAPSHOT`, reader latency during commit. |
+| 1.1 | 2026-10-12 | Added the invalid-row export (MiniExcel replaced by a streaming writer: +213 MB to +13 MB), the error-cell scan cost, and the not-yet-timed re-check. |
