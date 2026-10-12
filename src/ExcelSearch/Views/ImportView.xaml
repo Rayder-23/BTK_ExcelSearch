@@ -1,0 +1,194 @@
+<UserControl x:Class="ExcelSearch.Views.ImportView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:ExcelSearch.Views">
+
+    <UserControl.Resources>
+        <!-- Built-in converter: bool -> Visible/Collapsed. Razor would use an @if; XAML binds Visibility instead. -->
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+
+        <!-- Count pill shown next to each tab title -->
+        <Style x:Key="CountPill" TargetType="Border">
+            <Setter Property="Background" Value="#E6E8E1" />
+            <Setter Property="CornerRadius" Value="9" />
+            <Setter Property="Padding" Value="7,1" />
+            <Setter Property="Margin" Value="8,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+    </UserControl.Resources>
+
+    <!-- DataContext is the ImportViewModel (set by the DataTemplate in MainWindow); {Binding X} reads its property X. -->
+    <Grid Margin="32,28,32,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Message banner (file rejected, commit failed, cancelled...). -->
+        <Border Grid.Row="0" Background="{StaticResource AmberTintBrush}" BorderBrush="{StaticResource AmberBrush}"
+                BorderThickness="4,0,0,0" CornerRadius="4" Padding="16,12" Margin="0,0,0,18"
+                Visibility="{Binding HasMessage, Converter={StaticResource BoolToVis}}" AutomationProperties.AutomationId="MessageBanner">
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="14" Foreground="{StaticResource TextBrush}" LineHeight="21" />
+        </Border>
+
+        <!-- Each state is a panel; only the current state's panel is visible. -->
+        <Grid Grid.Row="1">
+
+            <!-- IDLE -->
+            <Border Visibility="{Binding IsIdle, Converter={StaticResource BoolToVis}}" Style="{StaticResource Card}"
+                    HorizontalAlignment="Left" VerticalAlignment="Top" Padding="40,36" MaxWidth="640">
+                <StackPanel>
+                    <Image Source="pack://application:,,,/ExcelSearch;component/Assets/logo-128.png" Width="84" Height="84" HorizontalAlignment="Left"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                    <TextBlock Text="Import an Excel file" Style="{StaticResource Heading}" Margin="0,18,0,0" />
+                    <TextBlock Style="{StaticResource Body}" Margin="0,10,0,0"
+                               Text="Choose a bank-transaction workbook (.xlsx). You will see exactly what would be added, what already exists and what has errors before anything is written to the database." />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,22,0,0">
+                        <TextBlock Text="1  Choose file" Foreground="{StaticResource GreenBrush}" FontWeight="SemiBold" />
+                        <TextBlock Text="   →   " Foreground="{StaticResource MutedBrush}" />
+                        <TextBlock Text="2  Review the preview" Foreground="{StaticResource GreenBrush}" FontWeight="SemiBold" />
+                        <TextBlock Text="   →   " Foreground="{StaticResource MutedBrush}" />
+                        <TextBlock Text="3  Import" Foreground="{StaticResource GreenBrush}" FontWeight="SemiBold" />
+                    </StackPanel>
+
+                    <Button Content="Choose Excel file" Command="{Binding ChooseFileCommand}" HorizontalAlignment="Left"
+                            Margin="0,26,0,0" Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="ChooseFileButton" />
+                </StackPanel>
+            </Border>
+
+            <!-- STAGING -->
+            <Border Visibility="{Binding IsStaging, Converter={StaticResource BoolToVis}}" Style="{StaticResource Card}"
+                    HorizontalAlignment="Left" VerticalAlignment="Top" Padding="40,36" Width="620">
+                <StackPanel>
+                    <TextBlock Text="Reading the file" Style="{StaticResource Heading}" />
+                    <TextBlock Style="{StaticResource Body}" Margin="0,8,0,24"
+                               Text="Rows are checked and staged in the database. Nothing is imported yet." />
+                    <ProgressBar IsIndeterminate="True" />
+                    <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                        <TextBlock FontFamily="{StaticResource MonoFont}" FontSize="26" FontWeight="SemiBold"
+                                   Foreground="{StaticResource GreenBrush}" AutomationProperties.AutomationId="RowsLoadedText"
+                                   Text="{Binding RowsLoaded, StringFormat=N0}" />
+                        <TextBlock Text="rows loaded" FontSize="14" Foreground="{StaticResource MutedBrush}"
+                                   VerticalAlignment="Bottom" Margin="10,0,0,4" />
+                    </StackPanel>
+                    <Button Content="Cancel" Command="{Binding ChooseFileCancelCommand}" HorizontalAlignment="Left" Margin="0,26,0,0"
+                            Style="{StaticResource SecondaryButton}" AutomationProperties.AutomationId="CancelStagingButton" />
+                </StackPanel>
+            </Border>
+
+            <!-- PREVIEW -->
+            <Grid Visibility="{Binding IsPreview, Converter={StaticResource BoolToVis}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,14">
+                    <TextBlock Text="{Binding FileName}" Style="{StaticResource Heading}" FontSize="24" AutomationProperties.AutomationId="PreviewFileName" />
+                    <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Bottom" Margin="16,0,0,4"
+                               Text="{Binding TotalRows, StringFormat={}{0:N0} rows read from the file}" />
+                </StackPanel>
+
+                <!-- Summary cards: the colour says what happens to those rows. -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,16">
+                    <views:SummaryCard Value="{Binding NewCount}" Label="New" Caption="will be imported"
+                                       Accent="{StaticResource GreenBrush}" AutomationProperties.AutomationId="CardNew" />
+                    <views:SummaryCard Value="{Binding ConflictCount}" Label="Conflicts" Caption="differ from the database"
+                                       Accent="{StaticResource AmberBrush}" AutomationProperties.AutomationId="CardConflicts" />
+                    <views:SummaryCard Value="{Binding InvalidCount}" Label="Invalid" Caption="have errors, not imported"
+                                       Accent="{StaticResource RedBrush}" AutomationProperties.AutomationId="CardInvalid" />
+                    <views:SummaryCard Value="{Binding ExactDuplicateCount}" Label="Already in database" Caption="identical, skipped"
+                                       Accent="{StaticResource SlateBrush}" AutomationProperties.AutomationId="CardExact" />
+                    <views:SummaryCard Value="{Binding FileDuplicateCount}" Label="Repeated in file" Caption="extra copies, skipped"
+                                       Accent="{StaticResource SlateBrush}" AutomationProperties.AutomationId="CardFileDup" />
+                </StackPanel>
+
+                <!-- One tab per status. ItemsSource = a list of tab ViewModels (like @foreach over a model collection);
+                     each tab body is a StatusTabView whose DataContext is that tab's ViewModel. -->
+                <TabControl Grid.Row="2" ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab, Mode=TwoWay}"
+                            AutomationProperties.AutomationId="StatusTabs">
+                    <TabControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Title}" />
+                                <Border Style="{StaticResource CountPill}">
+                                    <TextBlock Text="{Binding Count, StringFormat=N0}" FontFamily="{StaticResource MonoFont}"
+                                               FontSize="11.5" Foreground="{StaticResource MutedBrush}" />
+                                </Border>
+                            </StackPanel>
+                        </DataTemplate>
+                    </TabControl.ItemTemplate>
+                    <TabControl.ContentTemplate>
+                        <DataTemplate>
+                            <views:StatusTabView />
+                        </DataTemplate>
+                    </TabControl.ContentTemplate>
+                </TabControl>
+
+                <DockPanel Grid.Row="3" Margin="0,18,0,0" LastChildFill="False">
+                    <Button DockPanel.Dock="Right" Content="{Binding CommitButtonText}" Command="{Binding CommitCommand}"
+                            Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="CommitButton" />
+                    <Button DockPanel.Dock="Right" Content="Start over" Command="{Binding StartOverCommand}" Margin="0,0,12,0"
+                            Style="{StaticResource SecondaryButton}" AutomationProperties.AutomationId="StartOverButton" />
+                    <Button DockPanel.Dock="Right" Content="Discard" Command="{Binding DiscardCommand}" Margin="0,0,12,0"
+                            Style="{StaticResource SecondaryButton}" AutomationProperties.AutomationId="DiscardButton" />
+                </DockPanel>
+            </Grid>
+
+            <!-- COMMITTING (busy) -->
+            <Border Visibility="{Binding IsCommitting, Converter={StaticResource BoolToVis}}" Style="{StaticResource Card}"
+                    HorizontalAlignment="Left" VerticalAlignment="Top" Padding="40,36" Width="620">
+                <StackPanel>
+                    <TextBlock Text="Importing" Style="{StaticResource Heading}" />
+                    <TextBlock Style="{StaticResource Body}" Margin="0,8,0,24"
+                               Text="Writing the new rows to the database. Please keep the window open until this finishes." />
+                    <ProgressBar IsIndeterminate="True" />
+                </StackPanel>
+            </Border>
+
+            <!-- DONE -->
+            <Border Visibility="{Binding IsDone, Converter={StaticResource BoolToVis}}" Style="{StaticResource Card}"
+                    HorizontalAlignment="Left" VerticalAlignment="Top" Padding="40,36" Width="620">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <Grid Width="44" Height="44">
+                            <Ellipse Fill="{StaticResource GreenTintBrush}" />
+                            <Path Data="M13,23 L20,30 L32,15" Stroke="{StaticResource GreenBrush}" StrokeThickness="4"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                        </Grid>
+                        <TextBlock Text="Import complete" Style="{StaticResource Heading}" VerticalAlignment="Center" Margin="14,0,0,0" />
+                    </StackPanel>
+
+                    <Grid Margin="0,26,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="New rows imported" FontWeight="SemiBold" Margin="0,5" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Style="{StaticResource DoneValue}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource GreenBrush}"
+                                   Text="{Binding LastCommit.NewRows, StringFormat=N0}" AutomationProperties.AutomationId="DoneNew" />
+                        <TextBlock Grid.Row="1" Text="Rows updated" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.UpdatedRows, StringFormat=N0}" />
+                        <TextBlock Grid.Row="2" Text="Already in the database (skipped)" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedExactDuplicates, StringFormat=N0}" />
+                        <TextBlock Grid.Row="3" Text="Repeated in the file (skipped)" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedFileDuplicates, StringFormat=N0}" />
+                        <TextBlock Grid.Row="4" Text="Conflicts (skipped)" Foreground="{StaticResource AmberBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedConflicts, StringFormat=N0}" />
+                        <TextBlock Grid.Row="5" Text="Invalid rows (not imported)" Foreground="{StaticResource RedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="5" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.RejectedRows, StringFormat=N0}" />
+                    </Grid>
+
+                    <Button Content="Import another file" Command="{Binding ImportAnotherCommand}" HorizontalAlignment="Left"
+                            Margin="0,28,0,0" Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="ImportAnotherButton" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

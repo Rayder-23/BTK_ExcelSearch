@@ -2,6 +2,8 @@ using System.Windows;
 using ExcelSearch.Core.Import;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Data;
+using ExcelSearch.Services;
+using ExcelSearch.ViewModels;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -45,6 +47,12 @@ namespace ExcelSearch
                     });
                     services.AddSingleton<IStagingStore, SqlServerStagingStore>();
                     services.AddSingleton<ImportPreviewService>();
+                    services.AddSingleton<IImportPreviewService>(sp => sp.GetRequiredService<ImportPreviewService>());
+                    services.AddSingleton<IDialogService, WpfDialogService>();
+
+                    // ViewModels (one long-lived instance each: the shell shows the same import screen state) and the window.
+                    services.AddSingleton<ImportViewModel>();
+                    services.AddSingleton<ShellViewModel>();
 
                     services.AddTransient<MainWindow>();
                 })

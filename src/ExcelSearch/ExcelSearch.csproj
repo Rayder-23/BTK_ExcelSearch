@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <!-- appsettings.json, appsettings.Development.json, appsettings.Production.json (the *.example templates are not copied) -->
@@ -27,6 +27,13 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Logo images and the window icon are compiled into the exe and loaded with pack:// URIs. -->
+    <Resource Include="Assets\logo-*.png" />
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
 
 </Project>

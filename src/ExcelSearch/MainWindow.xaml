@@ -3,22 +3,91 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:ExcelSearch"
+        xmlns:vm="clr-namespace:ExcelSearch.ViewModels"
+        xmlns:views="clr-namespace:ExcelSearch.Views"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="420">
-        <Button x:Name="CountButton" Content="Count Transactions" Padding="16,6" Click="CountButton_Click" />
-        <TextBlock x:Name="CountText" Margin="0,12,0,0" HorizontalAlignment="Center" />
+        Title="ExcelSearch" Height="820" Width="1240" MinHeight="600" MinWidth="960"
+        Icon="pack://application:,,,/ExcelSearch;component/Assets/app.ico"
+        Background="{StaticResource PaperBrush}"
+        FontFamily="{StaticResource UiFont}" TextOptions.TextFormattingMode="Ideal">
 
-        <!-- Temporary staging test UI -->
-        <Button x:Name="ChooseButton" Content="Choose Excel file" Padding="16,6" Margin="0,32,0,0" Click="ChooseButton_Click" />
-        <ProgressBar x:Name="StageProgress" Height="16" Margin="0,12,0,0" Minimum="0" Maximum="1" Visibility="Hidden" />
-        <TextBlock x:Name="StageText" Margin="0,12,0,0" TextWrapping="Wrap" />
-        <CheckBox x:Name="OverwriteCheck" Content="Overwrite conflicts" Margin="0,12,0,0" IsEnabled="False"
-                  Checked="OverwriteCheck_Changed" Unchecked="OverwriteCheck_Changed" />
-        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-            <Button x:Name="CommitButton" Content="Commit" Padding="16,6" IsEnabled="False" Click="CommitButton_Click" />
-            <Button x:Name="DiscardButton" Content="Discard" Padding="16,6" Margin="12,0,0,0" IsEnabled="False" Click="DiscardButton_Click" />
-        </StackPanel>
-    </StackPanel>
+    <Window.Resources>
+        <!-- A DataTemplate keyed by type: "when the content is an ImportViewModel, draw it with ImportView".
+             It is the WPF counterpart of Razor picking a partial/display template from the model's type. -->
+        <DataTemplate DataType="{x:Type vm:ImportViewModel}">
+            <views:ImportView />
+        </DataTemplate>
+
+        <!-- Navigation entry: a green bar on the left marks the active screen. -->
+        <Style x:Key="NavItem" TargetType="ListBoxItem">
+            <Setter Property="Foreground" Value="{StaticResource InkMutedBrush}" />
+            <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Grid x:Name="Root" Background="Transparent">
+                            <Border x:Name="Bar" Width="4" HorizontalAlignment="Left" Background="Transparent" />
+                            <DockPanel Margin="20,13,12,13">
+                                <TextBlock x:Name="Soon" Text="SOON" DockPanel.Dock="Right" FontSize="10" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" Foreground="{StaticResource InkMutedBrush}" Opacity="0.7"
+                                           Visibility="Collapsed" />
+                                <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold" Foreground="{TemplateBinding Foreground}"
+                                           VerticalAlignment="Center" />
+                            </DockPanel>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{StaticResource InkSoftBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{StaticResource InkSoftBrush}" />
+                                <Setter TargetName="Bar" Property="Background" Value="#35C98A" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Soon" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="Root" Property="Background" Value="Transparent" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                                <Setter Property="Foreground" Value="#5F6C84" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="184" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Left rail: logo, then navigation. -->
+        <Border Grid.Column="0" Background="{StaticResource InkBrush}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="16,22,12,22" Orientation="Horizontal">
+                    <Border Width="40" Height="40" CornerRadius="10" Background="White" Padding="3">
+                        <Image Source="pack://application:,,,/ExcelSearch;component/Assets/logo-128.png" RenderOptions.BitmapScalingMode="HighQuality" />
+                    </Border>
+                    <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="ExcelSearch" FontFamily="{StaticResource DisplayFont}" FontSize="17" FontWeight="SemiBold"
+                                   Foreground="White" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource InkSoftBrush}" Margin="0,0,0,10" />
+
+                <!-- Items whose ViewModel is null (Query, for now) are disabled and cannot be selected. -->
+                <ListBox x:Name="NavList" ItemsSource="{Binding NavItems}" SelectedItem="{Binding SelectedNavItem, Mode=TwoWay}"
+                         Background="Transparent" BorderThickness="0" ItemContainerStyle="{StaticResource NavItem}"
+                         AutomationProperties.AutomationId="NavList" />
+            </DockPanel>
+        </Border>
+
+        <!-- The "content slot": shows whichever screen CurrentViewModel points at. -->
+        <ContentControl Grid.Column="1" Content="{Binding CurrentViewModel}" />
+    </Grid>
 </Window>

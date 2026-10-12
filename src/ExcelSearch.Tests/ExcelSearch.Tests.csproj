@@ -1,7 +1,7 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -28,6 +28,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ExcelSearch.Data\ExcelSearch.Data.csproj" />
+    <!-- The ViewModels live in the WPF project, so the tests target net8.0-windows to reference it. -->
+    <ProjectReference Include="..\ExcelSearch\ExcelSearch.csproj" />
   </ItemGroup>
 
 </Project>
