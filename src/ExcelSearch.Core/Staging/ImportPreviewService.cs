@@ -66,6 +66,9 @@ public sealed class ImportPreviewService
     /// <summary>Commits a staged batch into Transactions.</summary>
     public Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default) => _store.CommitAsync(batchId, ct);
 
+    /// <summary>Discards a staged batch; refused (not thrown) if it was already committed or discarded.</summary>
+    public Task<DiscardResult> DiscardAsync(int batchId, CancellationToken ct = default) => _store.DiscardAsync(batchId, ct);
+
     /// <summary>Removes abandoned batches and leftover staging rows; safe to run at any time.</summary>
     public Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default) => _store.CleanupStaleBatchesAsync(ct);
 }

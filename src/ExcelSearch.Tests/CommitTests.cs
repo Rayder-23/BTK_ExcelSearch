@@ -341,6 +341,132 @@ public class CommitTests
         Assert.Equal(0, await env.StagingCountAsync(committed));
     }
 
+    [DbFact]
+    public async Task Discard_refuses_a_Committed_batch_and_deletes_nothing()
+    {
+        await using var env = Create();
+
+        // (1) Status flipped by hand so the staging rows are still there to prove nothing gets deleted.
+        var flagged = await env.StageAsync(new[] { Row(2, env.Key("a"), "T1"), Row(3, env.Key("b"), "T1") });
+        await env.ExecuteAsync($"UPDATE dbo.ImportBatches SET Status = 'Committed' WHERE Id = {flagged}");
+
+        var refused = await env.Store.DiscardAsync(flagged);
+
+        Assert.False(refused.Discarded);
+        Assert.Contains("already committed", refused.Reason);
+        Assert.Equal("Committed", await env.BatchStatusAsync(flagged));
+        Assert.Equal(2, await env.StagingCountAsync(flagged));
+
+        // (2) A really committed batch: its Transactions rows survive the refused discard.
+        var real = await env.StageAsync(new[] { Row(2, env.Key("c"), "T1") });
+        Assert.True((await env.Store.CommitAsync(real)).Success);
+
+        var refusedAgain = await env.Store.DiscardAsync(real);
+
+        Assert.False(refusedAgain.Discarded);
+        Assert.Equal("Committed", await env.BatchStatusAsync(real));
+        Assert.Equal(1, await env.CountTransactionsAsync(real));
+    }
+
+    [DbFact]
+    public async Task Discard_works_on_a_Staged_batch_and_refuses_a_second_time()
+    {
+        await using var env = Create();
+        var id = await env.StageAsync(new[] { Row(2, env.Key("a"), "T1"), Row(3, env.Key("b"), "T1") });
+
+        var first = await env.Store.DiscardAsync(id);
+
+        Assert.True(first.Discarded);
+        Assert.Null(first.Reason);
+        Assert.Equal("Discarded", await env.BatchStatusAsync(id));
+        Assert.Equal(0, await env.StagingCountAsync(id));
+
+        var second = await env.Store.DiscardAsync(id);
+        Assert.False(second.Discarded);
+        Assert.Contains("already discarded", second.Reason);
+    }
+
+    [DbFact]
+    public async Task Commit_on_a_Discarded_batch_returns_BatchNotStaged_and_writes_nothing()
+    {
+        await using var env = Create();
+        var id = await env.StageAsync(new[] { Row(2, env.Key("a"), "T1") });
+        Assert.True((await env.Store.DiscardAsync(id)).Discarded);
+
+        var result = await env.Store.CommitAsync(id);
+
+        Assert.False(result.Success);
+        Assert.Equal(CommitFailure.BatchNotStaged, result.FailureReason);
+        Assert.Equal(0, await env.CountTransactionsWithPrefixAsync());
+    }
+
+    [DbFact]
+    public async Task Commit_and_discard_started_together_always_end_consistent()
+    {
+        const int rows = 50_000;
+        await using var env = Create();
+
+        for (var round = 1; round <= 5; round++)
+        {
+            var r = round;
+            var id = await env.StageAsync(Enumerable.Range(0, rows)
+                .Select(i => Row(i + 2, env.Key($"r{r}-{i}"), "T1", i)));
+
+            // Release both calls at the same moment.
+            var go = new TaskCompletionSource();
+            var commitTask = Task.Run(async () => { await go.Task; return await env.Store.CommitAsync(id); });
+            var discardTask = Task.Run(async () => { await go.Task; return await env.Store.DiscardAsync(id); });
+            go.SetResult();
+            await Task.WhenAll(commitTask, discardTask);
+            var commit = commitTask.Result;
+            var discard = discardTask.Result;
+
+            var inTransactions = await env.CountTransactionsAsync(id);
+            var status = await env.BatchStatusAsync(id);
+            _output.WriteLine($"Round {round}: {(commit.Success ? "commit won" : "discard won")}, " +
+                              $"{inTransactions:N0} rows in Transactions, batch {status}");
+
+            if (commit.Success)
+            {
+                Assert.False(discard.Discarded, "discard must be refused once the commit won");
+                Assert.Equal(rows, inTransactions);
+                Assert.Equal("Committed", status);
+            }
+            else
+            {
+                Assert.Equal(CommitFailure.BatchNotStaged, commit.FailureReason);
+                Assert.True(discard.Discarded, "discard must have won if the commit did not");
+                Assert.Equal(0, inTransactions);
+                Assert.Equal("Discarded", status);
+            }
+            Assert.Equal(0, await env.StagingCountAsync(id));   // the winner leaves no staging rows either way
+        }
+    }
+
+    [DbFact]
+    public async Task Discard_started_while_a_commit_is_running_waits_for_it_and_is_refused()
+    {
+        // The simultaneous test above is always won by the discard (a commit needs several round trips before it
+        // holds the batch row). Here the commit gets a head start, so this is the "commit wins" half of the race.
+        const int rows = 50_000;
+        await using var env = Create();
+        var id = await env.StageAsync(Enumerable.Range(0, rows).Select(i => Row(i + 2, env.Key($"w{i}"), "T1", i)));
+
+        var commitTask = Task.Run(() => env.Store.CommitAsync(id));
+        await Task.Delay(300);
+        var sw = Stopwatch.StartNew();
+        var discard = await env.Store.DiscardAsync(id);
+        var waited = sw.Elapsed;
+        var commit = await commitTask;
+        _output.WriteLine($"Discard returned after {waited.TotalSeconds:F1}s; commit {(commit.Success ? "succeeded" : "failed: " + commit.Message)}");
+
+        Assert.True(commit.Success, commit.Message);
+        Assert.False(discard.Discarded);
+        Assert.Contains("already committed", discard.Reason);
+        Assert.Equal(rows, await env.CountTransactionsAsync(id));
+        Assert.Equal("Committed", await env.BatchStatusAsync(id));
+    }
+
     [LargeDbFact]
     public async Task Commits_a_200k_row_file_then_sees_the_same_file_as_all_exact_duplicates()
     {
@@ -360,7 +486,22 @@ public class CommitTests
             // First import: stage (load + classify), then commit.
             var (first, load1, classify1) = await StageTimedAsync(env, path, progress);
             var sw = Stopwatch.StartNew();
-            var commit = await env.Store.CommitAsync(first);
+            var commitRun = Task.Run(() => env.Store.CommitAsync(first));
+
+            // While the commit runs, count Transactions from a different connection (a fresh context each time).
+            // With READ_COMMITTED_SNAPSHOT on, readers see the last committed rows and must not wait for the writer.
+            var rcsi = await env.IsReadCommittedSnapshotOnAsync();
+            var samples = new List<(double Seconds, int Count, bool CommitStillRunning)>();
+            await Task.Delay(3000);   // let the commit get into its insert
+            while (!commitRun.IsCompleted && samples.Count < 5)
+            {
+                var t0 = Stopwatch.StartNew();
+                var count = await env.CountAllTransactionsAsync();
+                samples.Add((t0.Elapsed.TotalSeconds, count, !commitRun.IsCompleted));
+                await Task.Delay(2000);
+            }
+
+            var commit = await commitRun;
             var commitTime = sw.Elapsed;
             Assert.True(commit.Success, commit.Message);
             Assert.Equal(200_000, commit.NewRows);
@@ -377,6 +518,12 @@ public class CommitTests
             peak = Math.Max(peak, proc.WorkingSet64);
 
             _output.WriteLine($"Stage #1: load {load1.TotalSeconds:F1}s, classify {classify1.TotalSeconds:F1}s");
+            _output.WriteLine($"is_read_committed_snapshot_on = {rcsi}");
+            foreach (var (secs, count, running) in samples)
+                _output.WriteLine($"SELECT COUNT(*) FROM dbo.Transactions during commit: {secs:F3}s, value {count:N0}, commit still running afterwards: {running}");
+            Assert.True(rcsi, "READ_COMMITTED_SNAPSHOT should be ON (Scripts/db/004_enable_rcsi.sql)");
+            Assert.NotEmpty(samples);
+            Assert.All(samples, x => Assert.True(x.Seconds < 5, $"a reader waited {x.Seconds:F1}s for the commit"));
             _output.WriteLine($"Commit #1: {commitTime.TotalSeconds:F1}s (reported {commit.ElapsedSeconds:F1}s, {commit.NewRows:N0} new)");
             _output.WriteLine($"Stage #2 (same file): load {load2.TotalSeconds:F1}s, classify {classify2.TotalSeconds:F1}s -> all {counts[RowStatus.ExactDuplicate]:N0} ExactDuplicate");
             _output.WriteLine($"Working set: baseline {baseline / 1048576.0:F0} MB, peak {peak / 1048576.0:F0} MB, growth {(peak - baseline) / 1048576.0:F0} MB");

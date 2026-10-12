@@ -81,8 +81,11 @@ public interface IStagingStore
     Task<PagedRows> GetPageAsync(int batchId, RowStatus status, int pageNumber, int pageSize,
         CancellationToken ct = default);
 
-    /// <summary>Deletes the batch's staging rows (in chunks) and marks the batch 'Discarded'. Never touches Transactions.</summary>
-    Task DiscardAsync(int batchId, CancellationToken ct = default);
+    /// <summary>
+    /// Marks a 'Staged' batch 'Discarded' and only then deletes its staging rows (in chunks). A batch that is
+    /// already committed or discarded is refused (nothing deleted). Never touches Transactions.
+    /// </summary>
+    Task<DiscardResult> DiscardAsync(int batchId, CancellationToken ct = default);
 
     /// <summary>
     /// Marks Conflict rows (status 5) of this batch to be overwritten (or not) on commit. A null

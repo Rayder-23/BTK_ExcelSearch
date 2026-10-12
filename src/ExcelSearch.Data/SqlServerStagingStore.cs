@@ -29,10 +29,14 @@ public sealed partial class SqlServerStagingStore : IStagingStore
     private readonly IDbContextFactory<AppDbContext> _factory;
     private readonly ILogger<SqlServerStagingStore>? _logger;
 
-    public SqlServerStagingStore(IDbContextFactory<AppDbContext> factory, ILogger<SqlServerStagingStore>? logger = null)
+    private readonly StagingStoreOptions _options;
+
+    public SqlServerStagingStore(IDbContextFactory<AppDbContext> factory, ILogger<SqlServerStagingStore>? logger = null,
+        StagingStoreOptions? options = null)
     {
         _factory = factory;
         _logger = logger;
+        _options = options ?? new StagingStoreOptions();
     }
 
     public async Task<int> CreateBatchAsync(string fileName, string? sheetName, string fileHash, string? importedBy,
@@ -199,16 +203,34 @@ public sealed partial class SqlServerStagingStore : IStagingStore
         return new PagedRows(entities.Select(ToStagedRow).ToList(), total);
     }
 
-    public async Task DiscardAsync(int batchId, CancellationToken ct = default)
+    public async Task<DiscardResult> DiscardAsync(int batchId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
         db.Database.SetCommandTimeout(CommandTimeoutSeconds);
 
-        await DeleteStagingRowsAsync(db, batchId, ct).ConfigureAwait(false);
-
-        // Only a batch that is still 'Staged' can be discarded; a Committed batch keeps its status.
-        await db.ImportBatches.Where(b => b.Id == batchId && b.Status == "Staged")
+        // Step 1: claim the batch with a conditional UPDATE. It succeeds for exactly one caller, and only while the
+        // batch is 'Staged'. If a commit is running it holds an UPDLOCK on this row, so the UPDATE waits for the
+        // commit to finish, then sees 'Committed', affects 0 rows and we refuse (nothing is deleted).
+        var claimed = await db.ImportBatches.Where(b => b.Id == batchId && b.Status == "Staged")
             .ExecuteUpdateAsync(s => s.SetProperty(b => b.Status, "Discarded"), ct).ConfigureAwait(false);
+
+        if (claimed == 0)
+        {
+            var status = await db.ImportBatches.AsNoTracking().Where(b => b.Id == batchId)
+                .Select(b => b.Status).SingleOrDefaultAsync(ct).ConfigureAwait(false);
+            return new DiscardResult(false, status switch
+            {
+                null => $"Batch {batchId} does not exist.",
+                "Committed" => $"Batch {batchId} was already committed, so it cannot be discarded.",
+                "Discarded" => $"Batch {batchId} was already discarded.",
+                _ => $"Batch {batchId} is '{status}', not 'Staged', so it cannot be discarded.",
+            });
+        }
+
+        // Step 2: only now remove the rows. Once the status is 'Discarded' no commit can pick this batch up, and if
+        // we crash here, CleanupStaleBatchesAsync deletes the leftover rows of Discarded batches.
+        await DeleteStagingRowsAsync(db, batchId, ct).ConfigureAwait(false);
+        return new DiscardResult(true);
     }
 
     /// <summary>Small DELETE chunks keep locks below the escalation threshold, so other users' inserts are not blocked.</summary>

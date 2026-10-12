@@ -33,6 +33,12 @@ namespace ExcelSearch
                         options.UseSqlServer(context.Configuration.GetConnectionString("DefaultConnection")));
 
                     services.AddSingleton<IExcelParser, ExcelParser>();
+                    // Top-level setting CommitLockTimeoutSeconds (default 120) in any appsettings file.
+                    services.AddSingleton(new StagingStoreOptions
+                    {
+                        CommitLockTimeoutSeconds = context.Configuration.GetValue("CommitLockTimeoutSeconds",
+                            StagingStoreOptions.DefaultCommitLockTimeoutSeconds),
+                    });
                     services.AddSingleton<IStagingStore, SqlServerStagingStore>();
                     services.AddSingleton<ImportPreviewService>();
 

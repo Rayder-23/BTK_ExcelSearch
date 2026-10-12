@@ -160,6 +160,20 @@ internal sealed class StagingEnv : IAsyncDisposable
         return await db.Database.SqlQuery<int>($"SELECT COUNT(*) AS Value FROM dbo.Transactions WHERE PayOrderNo LIKE {pattern}").SingleAsync();
     }
 
+    /// <summary>Plain count of the whole table (what another user's screen would run), on its own connection.</summary>
+    public async Task<int> CountAllTransactionsAsync()
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        return await db.Database.SqlQuery<int>($"SELECT COUNT(*) AS Value FROM dbo.Transactions").SingleAsync();
+    }
+
+    public async Task<bool> IsReadCommittedSnapshotOnAsync()
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        return await db.Database.SqlQuery<bool>(
+            $"SELECT is_read_committed_snapshot_on AS Value FROM sys.databases WHERE database_id = DB_ID()").SingleAsync();
+    }
+
     /// <summary>Builds a valid row with a real RowHash; <paramref name="debit"/> is what makes two rows differ.</summary>
     public static ImportRow Row(int excelRow, string po, string tx, decimal debit = 0m, bool invalid = false)
     {

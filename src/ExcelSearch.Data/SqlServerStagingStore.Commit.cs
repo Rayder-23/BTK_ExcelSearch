@@ -12,7 +12,6 @@ namespace ExcelSearch.Data;
 public sealed partial class SqlServerStagingStore
 {
     private const int CommitTimeoutSeconds = 30 * 60;
-    private const int AppLockTimeoutMs = 60_000;
     private static readonly TimeSpan StaleAfter = TimeSpan.FromHours(24);
 
     // Business columns copied between ImportStaging and Transactions (same names on both sides).
@@ -39,6 +38,12 @@ public sealed partial class SqlServerStagingStore
         "FROM dbo.Transactions AS t " +
         "JOIN dbo.ImportStaging AS s ON s.PayOrderNo = t.PayOrderNo AND s.TxnRefSeqNo = t.TxnRefSeqNo " +
         "WHERE s.ImportBatchId = @b AND s.Status = 5 AND s.Overwrite = 1;";
+
+    // sp_getapplock wants milliseconds; a zero or negative setting (0 = don't wait, -1 = forever) falls back to the default.
+    private int LockTimeoutMs =>
+        (_options.CommitLockTimeoutSeconds > 0
+            ? _options.CommitLockTimeoutSeconds
+            : StagingStoreOptions.DefaultCommitLockTimeoutSeconds) * 1000;
 
     public async Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite,
         IReadOnlyCollection<int>? excelRowNumbers, CancellationToken ct = default)
@@ -96,7 +101,7 @@ public sealed partial class SqlServerStagingStore
                 lockCmd.Parameters.AddWithValue("@Resource", "ExcelSearch.Commit");
                 lockCmd.Parameters.AddWithValue("@LockMode", "Exclusive");
                 lockCmd.Parameters.AddWithValue("@LockOwner", "Transaction");
-                lockCmd.Parameters.AddWithValue("@LockTimeout", AppLockTimeoutMs);
+                lockCmd.Parameters.AddWithValue("@LockTimeout", LockTimeoutMs);
                 var rc = new SqlParameter("@rc", SqlDbType.Int) { Direction = ParameterDirection.ReturnValue };
                 lockCmd.Parameters.Add(rc);
                 await lockCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -105,10 +110,13 @@ public sealed partial class SqlServerStagingStore
                         "Another import is committing, please try again in a moment.");
             }
 
-            // b. Guards (read under the lock, so nobody else can commit this batch meanwhile).
+            // b. Guards. UPDLOCK + HOLDLOCK keeps a lock on the batch row until this transaction ends, so a
+            //    concurrent DiscardAsync (whose conditional UPDATE needs that row) waits for the commit to
+            //    finish, then finds the batch 'Committed' and refuses. If the discard got in first, we read
+            //    'Discarded' here and stop. Either way the outcome is all-or-nothing, never a mix.
             string status;
             int totalRows;
-            await using (var cmd = Cmd("SELECT Status, TotalRows FROM dbo.ImportBatches WHERE Id = @b"))
+            await using (var cmd = Cmd("SELECT Status, TotalRows FROM dbo.ImportBatches WITH (UPDLOCK, HOLDLOCK) WHERE Id = @b"))
             await using (var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
             {
                 if (!await r.ReadAsync(ct).ConfigureAwait(false))
@@ -241,8 +249,10 @@ public sealed partial class SqlServerStagingStore
             WHERE Status = 'Staged' AND ImportedAt < DATEADD(HOUR, {-staleHours}, SYSUTCDATETIME())
             """).ToListAsync(ct).ConfigureAwait(false);
 
-        // DiscardAsync flips the status only while the batch is still 'Staged'.
-        foreach (var id in stale) await DiscardAsync(id, ct).ConfigureAwait(false);
+        // The same discard path as the Discard button: it refuses a batch that was committed meanwhile.
+        var discarded = 0;
+        foreach (var id in stale)
+            if ((await DiscardAsync(id, ct).ConfigureAwait(false)).Discarded) discarded++;
 
         var leftovers = await db.Database.SqlQuery<int>($"""
             SELECT b.Id AS Value FROM dbo.ImportBatches AS b
@@ -252,6 +262,6 @@ public sealed partial class SqlServerStagingStore
 
         foreach (var id in leftovers) await DeleteStagingRowsAsync(db, id, ct).ConfigureAwait(false);
 
-        return new CleanupResult(stale.Count, leftovers.Count);
+        return new CleanupResult(discarded, leftovers.Count);
     }
 }

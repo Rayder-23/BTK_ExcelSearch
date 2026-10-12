@@ -95,8 +95,16 @@ namespace ExcelSearch
             DiscardButton.IsEnabled = false;
             try
             {
-                await _staging.DiscardAsync(id);
-                StageText.Text = $"Batch {id} discarded.";
+                var result = await _staging.DiscardAsync(id);
+                if (result.Discarded)
+                {
+                    StageText.Text = $"Batch {id} discarded.";
+                }
+                else
+                {
+                    // Refused, e.g. a commit finished first. Show why; the batch is no longer ours to work with.
+                    StageText.Text = result.Reason;
+                }
                 ClearBatch();
             }
             catch (Exception ex)
