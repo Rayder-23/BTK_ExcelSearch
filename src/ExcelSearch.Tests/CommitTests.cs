@@ -535,6 +535,53 @@ public class CommitTests
         }
     }
 
+    [DbFact]
+    public async Task Conflict_page_shows_the_existing_row_and_exactly_which_columns_differ()
+    {
+        await using var env = Create();
+        var key = env.Key("k");
+
+        var old = Row(2, key, "T1", 99m);
+        old.CustomerName = "Old Name";
+        old.RowHash = RowHasher.Compute(old);
+        Assert.True((await env.Store.CommitAsync(await env.StageAsync(new[] { old }))).Success);
+
+        var changed = Row(2, key, "T1", 150m);
+        changed.CustomerName = "New Name";
+        changed.RowHash = RowHasher.Compute(changed);
+        var id = await env.StageAsync(new[] { changed, Row(3, env.Key("fresh"), "T1", 1m) });
+
+        var page = await env.Store.GetConflictPageAsync(id, 1, 100);
+
+        Assert.Equal(1, page.Total);
+        var conflict = Assert.Single(page.Rows);
+        Assert.Equal(2, conflict.Incoming.ExcelRowNumber);
+        Assert.False(conflict.ExistingRowMissing);
+        Assert.Equal(new[] { "Customer name", "Debit" }, conflict.Changes.Select(c => c.Label).OrderBy(x => x));
+        var debit = conflict.Changes.Single(c => c.Label == "Debit");
+        Assert.Equal("99.00", debit.Existing);
+        Assert.Equal("150.00", debit.Incoming);
+        Assert.Equal("Old Name", conflict.Changes.Single(c => c.Label == "Customer name").Existing);
+        Assert.Contains("Debit: 99.00 → 150.00", conflict.Summary);
+    }
+
+    [DbFact]
+    public async Task Conflict_page_flags_a_row_that_disappeared_from_Transactions()
+    {
+        await using var env = Create();
+        var key = env.Key("gone");
+        var seedBatch = await env.NewBatchAsync();
+        var existing = Row(1, key, "T1", 99m);
+        await env.SeedTransactionAsync(seedBatch, key, "T1", existing.RowHash);
+        var id = await env.StageAsync(new[] { Row(2, key, "T1", 5m) });
+
+        await env.ExecuteAsync($"DELETE FROM dbo.Transactions WHERE PayOrderNo = {key} AND TxnRefSeqNo = {"T1"}");
+        var conflict = Assert.Single((await env.Store.GetConflictPageAsync(id, 1, 100)).Rows);
+
+        Assert.True(conflict.ExistingRowMissing);
+        Assert.Empty(conflict.Changes);
+    }
+
     private static async Task<(int BatchId, TimeSpan Load, TimeSpan Classify)> StageTimedAsync(
         StagingEnv env, string path, IProgress<int> progress)
     {

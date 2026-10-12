@@ -105,4 +105,10 @@ public interface IStagingStore
     /// 'Committed'/'Discarded' batches. A recent 'Staged' batch (someone may be working on it) is never touched.
     /// </summary>
     Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// A page (1-based) of Conflict rows, each with the existing Transactions row compared column by column,
+    /// so the screen can show exactly what differs.
+    /// </summary>
+    Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, CancellationToken ct = default);
 }

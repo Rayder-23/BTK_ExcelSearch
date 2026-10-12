@@ -13,7 +13,7 @@ public sealed record StageResult(
     TimeSpan TotalElapsed);
 
 /// <summary>Parse -> create batch -> load -> classify. Nothing is written to Transactions.</summary>
-public sealed class ImportPreviewService
+public sealed class ImportPreviewService : IImportPreviewService
 {
     private readonly IExcelParser _parser;
     private readonly IStagingStore _store;
@@ -59,6 +59,10 @@ public sealed class ImportPreviewService
         }
     }
 
+    /// <summary>A page (1-based) of the batch's rows with the given status.</summary>
+    public Task<PagedRows> GetPageAsync(int batchId, RowStatus status, int pageNumber, int pageSize,
+        CancellationToken ct = default) => _store.GetPageAsync(batchId, status, pageNumber, pageSize, ct);
+
     /// <summary>Sets the Overwrite flag on Conflict rows (null row numbers = all of them).</summary>
     public Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite, IReadOnlyCollection<int>? excelRowNumbers = null,
         CancellationToken ct = default) => _store.SetConflictOverwriteAsync(batchId, overwrite, excelRowNumbers, ct);
@@ -71,4 +75,7 @@ public sealed class ImportPreviewService
 
     /// <summary>Removes abandoned batches and leftover staging rows; safe to run at any time.</summary>
     public Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default) => _store.CleanupStaleBatchesAsync(ct);
+
+    public Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, CancellationToken ct = default) =>
+        _store.GetConflictPageAsync(batchId, pageNumber, pageSize, ct);
 }
