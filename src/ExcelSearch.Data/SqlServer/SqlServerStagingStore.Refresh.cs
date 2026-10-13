@@ -5,9 +5,9 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
-namespace ExcelSearch.Data;
+namespace ExcelSearch.Data.SqlServer;
 
-// Re-check against the database, conflict totals, and keyset-paged reads of a batch's Invalid rows.
+// Re-check against the database.
 public sealed partial class SqlServerStagingStore
 {
     // Same idea as ClassifyChunk: bounded statements so one re-check cannot escalate to a table lock on ImportStaging.
@@ -36,10 +36,10 @@ public sealed partial class SqlServerStagingStore
           AND (s.Status <> n.NewStatus OR ISNULL(s.ExistingRowHash, '') <> ISNULL(n.NewExisting, ''));
         """;
 
-    public async Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default)
+    public override async Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var db = await Factory.CreateDbContextAsync(ct).ConfigureAwait(false);
 
         // One transaction whose first act is to lock the batch row (UPDLOCK, HOLDLOCK), exactly like CommitAsync:
         // a commit or discard of this batch waits for the re-check, and the re-check sees the batch's final status.
@@ -89,47 +89,5 @@ public sealed partial class SqlServerStagingStore
         await tx.CommitAsync(ct).ConfigureAwait(false);
         var list = moves.Select(m => new StatusMove(m.Key.From, m.Key.To, m.Value)).ToList();
         return new RefreshResult(true, null, list, cleared, sw.Elapsed.TotalSeconds);
-    }
-
-    public async Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default)
-    {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        var conflicts = db.ImportStagings.AsNoTracking()
-            .Where(s => s.ImportBatchId == batchId && s.Status == (byte)RowStatus.Conflict);
-        var total = await conflicts.CountAsync(ct).ConfigureAwait(false);
-        var overwrite = await conflicts.CountAsync(s => s.Overwrite, ct).ConfigureAwait(false);
-        return new ConflictCounts(total, overwrite);
-    }
-
-    // ---- Invalid rows for the export, in keyset pages (WHERE ExcelRowNumber > last ORDER BY ExcelRowNumber) ----
-
-    public async Task<BatchInfo?> GetBatchAsync(int batchId, CancellationToken ct = default)
-    {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        return await db.ImportBatches.AsNoTracking().Where(b => b.Id == batchId)
-            .Select(b => new BatchInfo(b.Id, b.FileName, b.SheetName, b.FileHash, b.Status))
-            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
-    }
-
-    public async Task<IReadOnlyList<InvalidRowError>> GetInvalidErrorsAfterAsync(int batchId, int afterRow, int take,
-        CancellationToken ct = default)
-    {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        return await db.ImportStagings.AsNoTracking()
-            .Where(s => s.ImportBatchId == batchId && s.Status == (byte)RowStatus.Invalid && s.ExcelRowNumber > afterRow)
-            .OrderBy(s => s.ExcelRowNumber).Take(take)
-            .Select(s => new InvalidRowError(s.ExcelRowNumber, s.ErrorText))
-            .ToListAsync(ct).ConfigureAwait(false);
-    }
-
-    public async Task<IReadOnlyList<StagedRow>> GetInvalidRowsAfterAsync(int batchId, int afterRow, int take,
-        CancellationToken ct = default)
-    {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        var entities = await db.ImportStagings.AsNoTracking()
-            .Where(s => s.ImportBatchId == batchId && s.Status == (byte)RowStatus.Invalid && s.ExcelRowNumber > afterRow)
-            .OrderBy(s => s.ExcelRowNumber).Take(take)
-            .ToListAsync(ct).ConfigureAwait(false);
-        return entities.Select(ToStagedRow).ToList();
     }
 }

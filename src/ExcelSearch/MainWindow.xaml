@@ -26,6 +26,8 @@
         <Style x:Key="NavItem" TargetType="ListBoxItem">
             <Setter Property="Foreground" Value="{StaticResource InkMutedBrush}" />
             <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
+            <Setter Property="ToolTip" Value="{Binding DisabledReason}" />
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
@@ -81,6 +83,50 @@
                                    Foreground="White" />
                     </StackPanel>
                 </StackPanel>
+
+                <!-- The database in use: a coloured card (blue = SQL Server, green = Local DB) with a large selector. -->
+                <Border DockPanel.Dock="Bottom" Margin="12,10,12,14" Padding="12,10,12,12" CornerRadius="0"
+                        AutomationProperties.AutomationId="DatabaseCard">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="#2F5D9E" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsLocalDb}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource GreenBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel>
+                        <TextBlock Text="DATABASE IN USE" FontSize="10" FontWeight="Bold" Foreground="#CCFFFFFF" Margin="0,0,0,6" />
+                        <ComboBox ItemsSource="{Binding DatabaseChoices}" SelectedItem="{Binding SelectedDatabase, Mode=TwoWay}"
+                                  FontSize="16" FontWeight="SemiBold" Height="38" VerticalContentAlignment="Center"
+                                  AutomationProperties.AutomationId="DatabaseSelector"
+                                  ToolTip="Choose where imports are stored. Switching restarts the app." />
+                        <TextBlock Text="Switching restarts the app." FontSize="10" Foreground="#CCFFFFFF" Margin="0,6,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Local DB only: a small file button above the database card that opens the folder holding the SQLite file. -->
+                <Button DockPanel.Dock="Bottom" HorizontalAlignment="Left" Margin="12,0,12,0" Padding="9,5" Cursor="Hand"
+                        Command="{Binding OpenDatabaseFolderCommand}" ToolTip="{Binding DatabaseFilePath}"
+                        AutomationProperties.AutomationId="OpenDatabaseFolderButton" AutomationProperties.Name="Open database file location"
+                        Background="{StaticResource InkSoftBrush}" Foreground="White" BorderThickness="0">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsLocalDb}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14" VerticalAlignment="Center" />
+                        <TextBlock Text="File" FontSize="12" FontWeight="SemiBold" Margin="7,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
 
                 <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource InkSoftBrush}" Margin="0,0,0,10" />
 

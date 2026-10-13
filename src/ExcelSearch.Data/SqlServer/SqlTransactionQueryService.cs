@@ -7,7 +7,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
-namespace ExcelSearch.Data;
+namespace ExcelSearch.Data.SqlServer;
 
 /// <summary>
 /// SQL Server implementation of <see cref="ITransactionQueryService"/>. The filter is turned into one LINQ query that EF

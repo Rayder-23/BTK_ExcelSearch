@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 
-namespace ExcelSearch.Data;
+namespace ExcelSearch.Data.SqlServer;
 
 // Commit step: staging -> dbo.Transactions, plus housekeeping.
 public sealed partial class SqlServerStagingStore
@@ -45,29 +45,14 @@ public sealed partial class SqlServerStagingStore
             ? _options.CommitLockTimeoutSeconds
             : StagingStoreOptions.DefaultCommitLockTimeoutSeconds) * 1000;
 
-    public async Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite,
-        IReadOnlyCollection<int>? excelRowNumbers, CancellationToken ct = default)
-    {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        db.Database.SetCommandTimeout(CommandTimeoutSeconds);
-
-        var query = db.ImportStagings.Where(s => s.ImportBatchId == batchId && s.Status == (byte)RowStatus.Conflict);
-        if (excelRowNumbers is not null)
-        {
-            var rows = excelRowNumbers.ToArray();
-            query = query.Where(s => rows.Contains(s.ExcelRowNumber));
-        }
-        return await query.ExecuteUpdateAsync(s => s.SetProperty(x => x.Overwrite, overwrite), ct).ConfigureAwait(false);
-    }
-
-    public async Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default)
+    public override async Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
         CommitResult Fail(CommitFailure reason, string message) =>
             new(false, reason, message, ElapsedSeconds: sw.Elapsed.TotalSeconds);
 
         CommitResult ok;
-        await using (var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false))
+        await using (var db = await Factory.CreateDbContextAsync(ct).ConfigureAwait(false))
         {
             // One explicit transaction: everything below commits together or not at all. If we return early
             // or throw, disposing the transaction rolls it back (and releases the application lock).
@@ -225,7 +210,7 @@ public sealed partial class SqlServerStagingStore
         //    harmless (CleanupStaleBatchesAsync removes leftovers of Committed batches later).
         try
         {
-            await using var cleanup = await _factory.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
+            await using var cleanup = await Factory.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
             cleanup.Database.SetCommandTimeout(CommandTimeoutSeconds);
             await DeleteStagingRowsAsync(cleanup, batchId, CancellationToken.None).ConfigureAwait(false);
         }
@@ -237,9 +222,9 @@ public sealed partial class SqlServerStagingStore
         return ok with { ElapsedSeconds = sw.Elapsed.TotalSeconds };
     }
 
-    public async Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default)
+    public override async Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var db = await Factory.CreateDbContextAsync(ct).ConfigureAwait(false);
         db.Database.SetCommandTimeout(CommandTimeoutSeconds);
 
         // Age is judged by the server clock (ImportedAt defaults to SYSUTCDATETIME()), not this PC's.

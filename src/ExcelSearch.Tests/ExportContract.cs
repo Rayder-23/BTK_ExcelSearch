@@ -8,15 +8,18 @@ using static ExcelSearch.Tests.StagingEnv;
 namespace ExcelSearch.Tests;
 
 /// <summary>
-/// The exporter together with the real staging store and parser (keyset paging, FileHash, row-number alignment).
-/// Same DB rules as the other tests: TEST_ keys, every batch tracked, only the test's own rows deleted.
+/// The invalid-row exporter together with the real staging store and parser (keyset paging, FileHash, row-number alignment),
+/// written once and run against every provider. Same DB rules as the other tests: TEST_ keys, every batch tracked, only the
+/// test's own rows deleted.
 /// </summary>
-public class ExportDbTests : IDisposable
+public abstract class ExportContract : IDisposable
 {
     private readonly ITestOutputHelper _output;
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "excelsearch-exportdb-" + Guid.NewGuid().ToString("N"));
 
-    public ExportDbTests(ITestOutputHelper output)
+    protected abstract StagingEnv NewEnv(bool large = false);
+
+    protected ExportContract(ITestOutputHelper output)
     {
         _output = output;
         Directory.CreateDirectory(_dir);
@@ -24,10 +27,10 @@ public class ExportDbTests : IDisposable
 
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 
-    [DbFact]
+    [SkippableFact]
     public async Task Fallback_export_pages_the_real_staging_table_in_keyset_chunks()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var rows = new List<ImportRow>();
         for (var i = 0; i < 25; i++) rows.Add(Row(2 + i * 2, env.Key($"bad{i}"), "T1", i, invalid: true));     // rows 2,4,6...
         for (var i = 0; i < 10; i++) rows.Add(Row(3 + i * 2, env.Key($"ok{i}"), "T1", i));                     // rows 3,5,7... valid
@@ -49,10 +52,10 @@ public class ExportDbTests : IDisposable
         Assert.Null(ws.Cell(27, 1).Value.IsBlank ? null : "extra row");                        // nothing after the 25th
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Source_export_end_to_end_with_the_real_parser_store_and_file_hash()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var source = Path.Combine(_dir, "orders.xlsx");
         using (var wb = new XLWorkbook())
         {
@@ -90,10 +93,10 @@ public class ExportDbTests : IDisposable
         Assert.True(o.Cell(2, 1).IsEmpty());
     }
 
-    [LargeDbFact]
+    [SkippableFact]
     public async Task Exports_100k_invalid_rows_from_a_200k_row_file_and_reports_time_and_memory()
     {
-        await using var env = Create();
+        await using var env = NewEnv(large: true);
         var source = Path.Combine(_dir, "big.xlsx");
         LargeFileTests.WriteSyntheticWorkbook(source, 200_000, env.Prefix + "-", invalidEveryOther: true);   // 100,000 rows with no date
 
@@ -119,7 +122,7 @@ public class ExportDbTests : IDisposable
             proc.Refresh();
             peak = Math.Max(peak, proc.WorkingSet64);
 
-            _output.WriteLine($"Exported {result.RowsWritten:N0} invalid rows ({result.Mode}) in {elapsed.TotalSeconds:F1}s " +
+            _output.WriteLine($"[{env.ProviderName}] Exported {result.RowsWritten:N0} invalid rows ({result.Mode}) in {elapsed.TotalSeconds:F1}s " +
                               $"({result.RowsWritten / elapsed.TotalSeconds:N0} rows/s), file {new FileInfo(dest).Length / 1048576.0:F1} MB");
             _output.WriteLine($"Working set: baseline {baseline / 1048576.0:F0} MB, peak {peak / 1048576.0:F0} MB, growth {(peak - baseline) / 1048576.0:F0} MB");
 

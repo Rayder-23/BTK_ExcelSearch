@@ -4,6 +4,7 @@ using ExcelSearch.Core.Import;
 using ExcelSearch.Core.Query;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Data;
+using ExcelSearch.Data.SqlServer;
 using Microsoft.EntityFrameworkCore;
 using Xunit.Abstractions;
 

@@ -8,19 +8,21 @@ using static ExcelSearch.Tests.StagingEnv;
 namespace ExcelSearch.Tests;
 
 /// <summary>
-/// Commit and cleanup against the development database. Same rules as StagingStoreTests: unique TEST_ keys,
-/// every batch tracked, only the test's own rows deleted in a finally (staging, then Transactions, then batches).
+/// Commit, discard races and cleanup, written once and run against every provider. Same rules as StagingStoreContract: unique
+/// TEST_ keys, every batch tracked, only the test's own rows deleted in a finally (staging, then Transactions, then batches).
 /// </summary>
-public class CommitTests
+public abstract class CommitContract
 {
     private readonly ITestOutputHelper _output;
 
-    public CommitTests(ITestOutputHelper output) => _output = output;
+    protected CommitContract(ITestOutputHelper output) => _output = output;
 
-    [DbFact]
+    protected abstract StagingEnv NewEnv(bool large = false);
+
+    [SkippableFact]
     public async Task Commit_inserts_new_rows_with_correct_values_and_updates_the_batch()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
 
         var first = Row(2, env.Key("a"), "T1", 12.50m);
         first.Cnic = "3520212345671";
@@ -72,10 +74,10 @@ public class CommitTests
         Assert.Equal(0, await env.StagingCountAsync(id));                // staging rows are gone after commit
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Exact_duplicates_are_skipped_and_the_existing_row_is_untouched()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seed = await env.NewBatchAsync();
         var row = Row(2, env.Key("same"), "T1", 10m);
         await env.SeedTransactionAsync(seed, row.PayOrderNo!, row.TxnRefSeqNo!, row.RowHash);
@@ -92,10 +94,10 @@ public class CommitTests
         Assert.Equal(1, (await env.GetBatchAsync(id)).SkippedRows);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Conflict_is_skipped_by_default()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seed = await env.NewBatchAsync();
         var existing = Row(2, env.Key("c"), "T1", 99m);
         await env.SeedTransactionAsync(seed, existing.PayOrderNo!, "T1", existing.RowHash);
@@ -112,10 +114,10 @@ public class CommitTests
         Assert.Equal(1, (await env.GetBatchAsync(id)).SkippedRows);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Conflict_is_updated_only_when_Overwrite_is_set()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seed = await env.NewBatchAsync();
         var e1 = Row(2, env.Key("c1"), "T1", 99m);
         var e2 = Row(3, env.Key("c2"), "T1", 99m);
@@ -153,10 +155,10 @@ public class CommitTests
         Assert.Equal(1, batch.SkippedRows);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task SetConflictOverwrite_with_null_rows_touches_all_conflicts_of_that_batch_only()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seed = await env.NewBatchAsync();
         var existing = Row(2, env.Key("x"), "T1", 99m);
         await env.SeedTransactionAsync(seed, existing.PayOrderNo!, "T1", existing.RowHash);
@@ -172,10 +174,10 @@ public class CommitTests
         Assert.False(otherRow.Overwrite);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Committing_the_same_batch_twice_fails_with_BatchNotStaged()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(new[] { Row(2, env.Key("a"), "T1") });
 
         Assert.True((await env.Store.CommitAsync(id)).Success);
@@ -186,20 +188,20 @@ public class CommitTests
         Assert.Equal(1, await env.CountTransactionsWithPrefixAsync());
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Commit_of_an_unknown_batch_fails_with_BatchNotStaged()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var result = await env.Store.CommitAsync(int.MaxValue);
         Assert.Equal(CommitFailure.BatchNotStaged, result.FailureReason);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task TotalRows_not_matching_the_staging_count_is_IncompleteLoad()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(new[] { Row(2, env.Key("a"), "T1"), Row(3, env.Key("b"), "T1") });
-        await env.ExecuteAsync($"UPDATE dbo.ImportBatches SET TotalRows = 3 WHERE Id = {id}");
+        await env.SetTotalRowsAsync(id, 3);
 
         var result = await env.Store.CommitAsync(id);
 
@@ -209,10 +211,10 @@ public class CommitTests
         Assert.Equal("Staged", await env.BatchStatusAsync(id));
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task A_batch_with_a_Pending_row_is_IncompleteLoad()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.NewBatchAsync();
         await env.Store.LoadRowsAsync(id, new[] { Row(2, env.Key("a"), "T1") }, null);   // loaded, never classified
 
@@ -222,10 +224,10 @@ public class CommitTests
         Assert.Equal(0, await env.CountTransactionsWithPrefixAsync());
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task New_key_committed_by_someone_else_with_different_values_aborts_with_RowsChangedSincePreview()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var a = await env.StageAsync(new[] { Row(2, env.Key("k"), "T1", 1m), Row(3, env.Key("only-a"), "T1") });
         var b = await env.StageAsync(new[] { Row(2, env.Key("k"), "T1", 2m) });
 
@@ -241,10 +243,10 @@ public class CommitTests
         Assert.Equal(2, await env.StagingCountAsync(a));
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task New_key_committed_by_someone_else_with_identical_values_counts_as_exact_duplicate()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var a = await env.StageAsync(new[] { Row(2, env.Key("k"), "T1", 1m), Row(3, env.Key("only-a"), "T1") });
         var b = await env.StageAsync(new[] { Row(2, env.Key("k"), "T1", 1m) });
 
@@ -258,10 +260,10 @@ public class CommitTests
         Assert.Equal(a, (await env.GetTransactionAsync(env.Key("only-a"), "T1"))!.ImportBatchId);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Overwrite_whose_existing_row_changed_since_the_preview_aborts()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seed = await env.NewBatchAsync();
         var existing = Row(2, env.Key("c"), "T1", 99m);
         await env.SeedTransactionAsync(seed, existing.PayOrderNo!, "T1", existing.RowHash);
@@ -272,7 +274,7 @@ public class CommitTests
         // Someone else changes the existing row after our preview.
         var other = new string('f', 64);
         var po = existing.PayOrderNo!;
-        await env.ExecuteAsync($"UPDATE dbo.Transactions SET RowHash = {other} WHERE PayOrderNo = {po} AND TxnRefSeqNo = 'T1'");
+        await env.SetTransactionHashAsync(other, po);
 
         var result = await env.Store.CommitAsync(id);
 
@@ -283,10 +285,10 @@ public class CommitTests
         Assert.Equal("Staged", await env.BatchStatusAsync(id));
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Parallel_commits_with_overlapping_identical_keys_both_succeed_without_deadlock()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var a = await env.StageAsync(new[] { Row(2, env.Key("k1"), "T1", 1m), Row(3, env.Key("k2"), "T1", 2m) });
         var b = await env.StageAsync(new[] { Row(2, env.Key("k2"), "T1", 2m), Row(3, env.Key("k3"), "T1", 3m) });
 
@@ -298,10 +300,10 @@ public class CommitTests
         Assert.Equal(3, await env.CountTransactionsWithPrefixAsync());
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Parallel_commits_with_overlapping_different_keys_let_exactly_one_win()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var a = await env.StageAsync(new[] { Row(2, env.Key("k1"), "T1", 1m), Row(3, env.Key("k2"), "T1", 2m) });
         var b = await env.StageAsync(new[] { Row(2, env.Key("k2"), "T1", 99m), Row(3, env.Key("k3"), "T1", 3m) });
 
@@ -313,18 +315,18 @@ public class CommitTests
         Assert.Equal(2, await env.CountTransactionsWithPrefixAsync());  // only the winner's two rows
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Cleanup_discards_old_Staged_batches_leaves_fresh_ones_and_clears_leftovers_of_Committed_ones()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
 
         var old = await env.StageAsync(new[] { Row(2, env.Key("old"), "T1") });
-        await env.ExecuteAsync($"UPDATE dbo.ImportBatches SET ImportedAt = DATEADD(HOUR, -25, SYSUTCDATETIME()) WHERE Id = {old}");
+        await env.BackdateBatchAsync(old, 25);
 
         var fresh = await env.StageAsync(new[] { Row(2, env.Key("fresh"), "T1") });
 
         var committed = await env.StageAsync(new[] { Row(2, env.Key("done"), "T1") });
-        await env.ExecuteAsync($"UPDATE dbo.ImportBatches SET Status = 'Committed' WHERE Id = {committed}");   // leftovers remain
+        await env.SetBatchStatusAsync(committed, "Committed");   // leftovers remain
 
         var result = await env.Store.CleanupStaleBatchesAsync();
 
@@ -341,14 +343,14 @@ public class CommitTests
         Assert.Equal(0, await env.StagingCountAsync(committed));
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Discard_refuses_a_Committed_batch_and_deletes_nothing()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
 
         // (1) Status flipped by hand so the staging rows are still there to prove nothing gets deleted.
         var flagged = await env.StageAsync(new[] { Row(2, env.Key("a"), "T1"), Row(3, env.Key("b"), "T1") });
-        await env.ExecuteAsync($"UPDATE dbo.ImportBatches SET Status = 'Committed' WHERE Id = {flagged}");
+        await env.SetBatchStatusAsync(flagged, "Committed");
 
         var refused = await env.Store.DiscardAsync(flagged);
 
@@ -368,10 +370,10 @@ public class CommitTests
         Assert.Equal(1, await env.CountTransactionsAsync(real));
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Discard_works_on_a_Staged_batch_and_refuses_a_second_time()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(new[] { Row(2, env.Key("a"), "T1"), Row(3, env.Key("b"), "T1") });
 
         var first = await env.Store.DiscardAsync(id);
@@ -386,10 +388,10 @@ public class CommitTests
         Assert.Contains("already discarded", second.Reason);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Commit_on_a_Discarded_batch_returns_BatchNotStaged_and_writes_nothing()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(new[] { Row(2, env.Key("a"), "T1") });
         Assert.True((await env.Store.DiscardAsync(id)).Discarded);
 
@@ -400,11 +402,11 @@ public class CommitTests
         Assert.Equal(0, await env.CountTransactionsWithPrefixAsync());
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Commit_and_discard_started_together_always_end_consistent()
     {
         const int rows = 50_000;
-        await using var env = Create();
+        await using var env = NewEnv();
 
         for (var round = 1; round <= 5; round++)
         {
@@ -443,13 +445,13 @@ public class CommitTests
         }
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Discard_started_while_a_commit_is_running_waits_for_it_and_is_refused()
     {
         // The simultaneous test above is always won by the discard (a commit needs several round trips before it
         // holds the batch row). Here the commit gets a head start, so this is the "commit wins" half of the race.
         const int rows = 50_000;
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(Enumerable.Range(0, rows).Select(i => Row(i + 2, env.Key($"w{i}"), "T1", i)));
 
         var commitTask = Task.Run(() => env.Store.CommitAsync(id));
@@ -467,10 +469,10 @@ public class CommitTests
         Assert.Equal("Committed", await env.BatchStatusAsync(id));
     }
 
-    [LargeDbFact]
+    [SkippableFact]
     public async Task Commits_a_200k_row_file_then_sees_the_same_file_as_all_exact_duplicates()
     {
-        await using var env = Create();
+        await using var env = NewEnv(large: true);
         var path = Path.Combine(Path.GetTempPath(), $"excelsearch-commit-{Guid.NewGuid():N}.xlsx");
         try
         {
@@ -489,8 +491,8 @@ public class CommitTests
             var commitRun = Task.Run(() => env.Store.CommitAsync(first));
 
             // While the commit runs, count Transactions from a different connection (a fresh context each time).
-            // With READ_COMMITTED_SNAPSHOT on, readers see the last committed rows and must not wait for the writer.
-            var rcsi = await env.IsReadCommittedSnapshotOnAsync();
+            // With READ_COMMITTED_SNAPSHOT on (SQL Server) or WAL (SQLite), readers see the last committed rows and must not wait for the writer.
+            var (isolationOn, isolationText) = await env.ReaderIsolationAsync();
             var samples = new List<(double Seconds, int Count, bool CommitStillRunning)>();
             await Task.Delay(3000);   // let the commit get into its insert
             while (!commitRun.IsCompleted && samples.Count < 5)
@@ -517,11 +519,11 @@ public class CommitTests
             proc.Refresh();
             peak = Math.Max(peak, proc.WorkingSet64);
 
-            _output.WriteLine($"Stage #1: load {load1.TotalSeconds:F1}s, classify {classify1.TotalSeconds:F1}s");
-            _output.WriteLine($"is_read_committed_snapshot_on = {rcsi}");
+            _output.WriteLine($"[{env.ProviderName}] Stage #1: load {load1.TotalSeconds:F1}s ({200_000 / load1.TotalSeconds:N0} rows/s), classify {classify1.TotalSeconds:F1}s");
+            _output.WriteLine(isolationText);
             foreach (var (secs, count, running) in samples)
-                _output.WriteLine($"SELECT COUNT(*) FROM dbo.Transactions during commit: {secs:F3}s, value {count:N0}, commit still running afterwards: {running}");
-            Assert.True(rcsi, "READ_COMMITTED_SNAPSHOT should be ON (Scripts/db/004_enable_rcsi.sql)");
+                _output.WriteLine($"SELECT COUNT(*) FROM Transactions during commit: {secs:F3}s, value {count:N0}, commit still running afterwards: {running}");
+            Assert.True(isolationOn, "Readers must not wait for a commit: READ_COMMITTED_SNAPSHOT (Scripts/db/004_enable_rcsi.sql) or WAL must be ON");
             Assert.NotEmpty(samples);
             Assert.All(samples, x => Assert.True(x.Seconds < 5, $"a reader waited {x.Seconds:F1}s for the commit"));
             _output.WriteLine($"Commit #1: {commitTime.TotalSeconds:F1}s (reported {commit.ElapsedSeconds:F1}s, {commit.NewRows:N0} new)");
@@ -535,10 +537,10 @@ public class CommitTests
         }
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Conflict_page_shows_the_existing_row_and_exactly_which_columns_differ()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var key = env.Key("k");
 
         var old = Row(2, key, "T1", 99m);
@@ -565,17 +567,17 @@ public class CommitTests
         Assert.Contains("Debit: 99.00 → 150.00", conflict.Summary);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Conflict_page_flags_a_row_that_disappeared_from_Transactions()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var key = env.Key("gone");
         var seedBatch = await env.NewBatchAsync();
         var existing = Row(1, key, "T1", 99m);
         await env.SeedTransactionAsync(seedBatch, key, "T1", existing.RowHash);
         var id = await env.StageAsync(new[] { Row(2, key, "T1", 5m) });
 
-        await env.ExecuteAsync($"DELETE FROM dbo.Transactions WHERE PayOrderNo = {key} AND TxnRefSeqNo = {"T1"}");
+        await env.DeleteTransactionAsync(key);
         var conflict = Assert.Single((await env.Store.GetConflictPageAsync(id, 1, 100)).Rows);
 
         Assert.True(conflict.ExistingRowMissing);

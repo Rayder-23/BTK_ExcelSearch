@@ -11,7 +11,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.31" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.31" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The SQLite schema scripts live with the other database scripts and are embedded, so the app needs no loose files. -->
+    <EmbeddedResource Include="..\..\Scripts\db\sqlite\*.sql" LogicalName="ExcelSearch.Sqlite.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

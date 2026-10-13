@@ -23,7 +23,7 @@ namespace ExcelSearch
         // Closing cannot wait for a dialog that is awaited, so: cancel this attempt, ask, and close again if approved.
         protected override async void OnClosing(CancelEventArgs e)
         {
-            if (_closeApproved)
+            if (_closeApproved || _shell.CloseApproved)
             {
                 base.OnClosing(e);
                 return;
@@ -43,7 +43,9 @@ namespace ExcelSearch
             if (ok)
             {
                 _closeApproved = true;
-                Close();
+                // Close() cannot be called from inside the Closing event (it threw "while a Window is closing" and crashed the
+                // app on every normal exit); queue it for after this event has finished.
+                _ = Dispatcher.BeginInvoke(new Action(Close));
             }
         }
     }

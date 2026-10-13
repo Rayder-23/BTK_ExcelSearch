@@ -1,0 +1,6 @@
+{
+  "Database": {
+    "Provider": "Sqlite",
+    "SqlitePath": "%LocalAppData%\\ExcelSearch\\excelsearch.db"
+  }
+}

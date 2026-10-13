@@ -8,19 +8,23 @@ using static ExcelSearch.Tests.StagingEnv;
 namespace ExcelSearch.Tests;
 
 /// <summary>
-/// Integration tests against the development database (see DbFactAttribute). Each test uses unique TEST_ keys,
-/// remembers its batches and removes only what it created.
+/// The staging store's behaviour, written once and run against EVERY provider (see ContractTestShells.cs): SQL Server (the
+/// development database) and SQLite (a temp file per test class). Each test uses unique TEST_ keys, remembers its batches and
+/// removes only what it created. A provider that behaves differently fails the same test.
 /// </summary>
-public class StagingStoreTests
+public abstract class StagingStoreContract
 {
     private readonly ITestOutputHelper _output;
 
-    public StagingStoreTests(ITestOutputHelper output) => _output = output;
+    protected StagingStoreContract(ITestOutputHelper output) => _output = output;
 
-    [DbFact]
+    /// <summary>The environment for the provider under test; skips the test when that provider is switched off.</summary>
+    protected abstract StagingEnv NewEnv(bool large = false);
+
+    [SkippableFact]
     public async Task Load_leaves_valid_rows_Pending_and_invalid_rows_Invalid_with_no_hash()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.NewBatchAsync();
 
         var load = await env.Store.LoadRowsAsync(id, new[]
@@ -41,10 +45,10 @@ public class StagingStoreTests
         Assert.Equal(64, pending.RowHash!.Length);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Failure_mid_load_discards_the_batch_and_leaves_no_staging_rows()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.NewBatchAsync();
 
         // 10,500 rows then a failure: with BatchSize 10,000 the first batch is already committed when it throws,
@@ -61,10 +65,10 @@ public class StagingStoreTests
         Assert.All(await env.Store.GetCountsAsync(id), c => Assert.Equal(0, c.Value));
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Bulk_load_stores_valid_invalid_and_truncated_values_exactly()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
 
         var valid = Row(2, env.Key("valid"), "T1", 12.50m);
         valid.Cnic = "3520212345671";
@@ -107,10 +111,10 @@ public class StagingStoreTests
         Assert.Equal(new string('x', 200), bad[1].CustomerName);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Classify_assigns_all_five_statuses()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seedBatch = await env.NewBatchAsync();
 
         var exact = Row(4, env.Key("exact"), "T1", 10m);
@@ -141,10 +145,10 @@ public class StagingStoreTests
         Assert.Equal(7, Assert.Single((await env.Store.GetPageAsync(id, RowStatus.FileDuplicate, 1, 10)).Rows).ExcelRowNumber);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Conflict_row_stores_the_existing_row_hash_and_other_rows_keep_it_null()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seedBatch = await env.NewBatchAsync();
         var existing = Row(1, env.Key("k"), "T1", 99m);
         await env.SeedTransactionAsync(seedBatch, existing.PayOrderNo!, existing.TxnRefSeqNo!, existing.RowHash);
@@ -158,10 +162,10 @@ public class StagingStoreTests
         Assert.Null(added.ExistingRowHash);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Identical_rows_with_the_same_key_leave_the_first_and_mark_later_ones_FileDuplicate()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(new[]
         {
             Row(2, env.Key("k"), "T1", 5m),
@@ -173,10 +177,10 @@ public class StagingStoreTests
         Assert.Equal(new[] { 3, 4 }, (await env.Store.GetPageAsync(id, RowStatus.FileDuplicate, 1, 10)).Rows.Select(r => r.ExcelRowNumber));
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Differing_rows_with_the_same_key_are_all_Invalid_and_name_the_other_rows()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(new[]
         {
             Row(2, env.Key("k"), "T1", 5m),
@@ -193,10 +197,10 @@ public class StagingStoreTests
         Assert.Equal(5, Assert.Single((await env.Store.GetPageAsync(id, RowStatus.New, 1, 10)).Rows).ExcelRowNumber);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Keys_are_compared_case_insensitively_like_the_database()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(new[]
         {
             Row(2, env.Key("abc"), "T1", 5m),
@@ -206,10 +210,10 @@ public class StagingStoreTests
         Assert.Equal(2, (await env.Store.GetPageAsync(id, RowStatus.Invalid, 1, 10)).Total);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task GetPage_pages_by_row_number_and_reports_the_total()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await env.StageAsync(Enumerable.Range(2, 25).Select(n => Row(n, env.Key("p" + n), "T1", n)));
 
         var page1 = await env.Store.GetPageAsync(id, RowStatus.New, 1, 10);
@@ -226,10 +230,10 @@ public class StagingStoreTests
         Assert.Equal(new DateTime(2024, 4, 3), page1.Rows[0].ValueDate);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Discard_removes_only_its_own_batch_and_leaves_Transactions_alone()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seedBatch = await env.NewBatchAsync();
         await env.SeedTransactionAsync(seedBatch, env.Key("existing"), "T1", new string('b', 64));
 
@@ -245,10 +249,10 @@ public class StagingStoreTests
         Assert.Equal(1, await env.CountTransactionsAsync(seedBatch));
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Two_batches_staged_in_parallel_with_overlapping_keys_are_classified_independently()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seedBatch = await env.NewBatchAsync();
 
         // Keys shared by both batches. "existing" is already in Transactions with hash H.
@@ -298,10 +302,10 @@ public class StagingStoreTests
         Assert.Contains("4", bad[1].ErrorText);
     }
 
-    [LargeDbFact]
+    [SkippableFact]
     public async Task Stages_a_200k_row_file_and_reports_time_load_rate_and_memory()
     {
-        await using var env = Create();
+        await using var env = NewEnv(large: true);
         var path = Path.Combine(Path.GetTempPath(), $"excelsearch-stage-{Guid.NewGuid():N}.xlsx");
         try
         {
@@ -345,7 +349,7 @@ public class StagingStoreTests
             proc.Refresh();
             peak = Math.Max(peak, proc.WorkingSet64);
 
-            _output.WriteLine($"Rows loaded: {load.RowsLoaded:N0}");
+            _output.WriteLine($"[{env.ProviderName}] Rows loaded: {load.RowsLoaded:N0}");
             _output.WriteLine($"Counts: {string.Join(", ", counts.Select(c => $"{c.Key}={c.Value:N0}"))}");
             _output.WriteLine($"Parse alone:  {parseTime.TotalSeconds:F1}s");
             _output.WriteLine($"Load (parse + insert): {loadTime.TotalSeconds:F1}s  = {load.RowsPerSecond:N0} rows/s; insert only ~{(loadTime - parseTime).TotalSeconds:F1}s");
@@ -364,12 +368,14 @@ public class StagingStoreTests
     }
 }
 
-public class ImportPreviewServiceTests
+public abstract class ImportPreviewContract
 {
-    [DbFact]
+    protected abstract StagingEnv NewEnv(bool large = false);
+
+    [SkippableFact]
     public async Task Rejected_file_creates_no_batch()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var dir = Directory.CreateTempSubdirectory("excelsearch-svc-").FullName;
         var fileName = $"{env.Prefix}-bad.xlsx"; // unique, so parallel tests cannot affect the check
         var path = Path.Combine(dir, fileName);

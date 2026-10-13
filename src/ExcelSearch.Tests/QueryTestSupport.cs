@@ -1,5 +1,6 @@
 using ExcelSearch.Core.Query;
 using ExcelSearch.Data;
+using ExcelSearch.Data.SqlServer;
 using ExcelSearch.Data.Entities;
 
 namespace ExcelSearch.Tests;

@@ -6,19 +6,18 @@ using static ExcelSearch.Tests.StagingEnv;
 namespace ExcelSearch.Tests;
 
 /// <summary>
-/// RefreshAgainstDatabaseAsync and the conflict Overwrite flags/counts, against the development database.
-/// Same rules as the other DB tests: unique TEST_ keys, every batch tracked, only the test's own rows deleted.
+/// RefreshAgainstDatabaseAsync and the conflict Overwrite flags/counts, written once and run against every provider.
+/// Same rules as the other contract tests: unique TEST_ keys, every batch tracked, only the test's own rows deleted.
 /// </summary>
-public class RefreshTests
+public abstract class RefreshContract
 {
+    protected abstract StagingEnv NewEnv(bool large = false);
+
     private static readonly string HashA = new('a', 64);
     private static readonly string HashB = new('b', 64);
 
-    private static async Task<ExcelSearch.Data.Entities.ImportStaging> StagingRowAsync(StagingEnv env, int batchId, int excelRow)
-    {
-        await using var db = await env.Factory.CreateDbContextAsync();
-        return await db.ImportStagings.AsNoTracking().SingleAsync(s => s.ImportBatchId == batchId && s.ExcelRowNumber == excelRow);
-    }
+    private static Task<ExcelSearch.Data.Entities.ImportStaging> StagingRowAsync(StagingEnv env, int batchId, int excelRow) =>
+        env.StagingRowAsync(batchId, excelRow);
 
     /// <summary>Stage one row whose key is already in Transactions with a different hash, so it is a Conflict (existing hash = HashA).</summary>
     private static async Task<int> StageConflictAsync(StagingEnv env, string key, int excelRow = 2)
@@ -30,10 +29,10 @@ public class RefreshTests
         return id;
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task New_row_committed_meanwhile_with_equal_values_becomes_ExactDuplicate()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var key = env.Key("k");
         var row = Row(2, key, "T1", 5m);
         var id = await env.StageAsync(new[] { row });
@@ -51,13 +50,13 @@ public class RefreshTests
         Assert.StartsWith("1 row changed: 1 New → Already in database", result.Describe());
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task New_row_committed_meanwhile_with_different_values_becomes_Conflict_with_the_existing_hash_and_overwrite_reset()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var key = env.Key("k");
         var id = await env.StageAsync(new[] { Row(2, key, "T1", 5m) });
-        await env.ExecuteAsync($"UPDATE dbo.ImportStaging SET Overwrite = 1 WHERE ImportBatchId = {id} AND ExcelRowNumber = 2");   // stray flag
+        await env.SetStagingOverwriteAsync(id, 2, true);   // stray flag
 
         await env.SeedTransactionAsync(await env.NewBatchAsync(), key, "T1", HashA);
         var result = await env.Store.RefreshAgainstDatabaseAsync(id);
@@ -71,10 +70,10 @@ public class RefreshTests
         Assert.Equal(1, result.OverwriteChoicesCleared);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Conflict_with_overwrite_whose_existing_row_did_not_change_keeps_overwrite()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var id = await StageConflictAsync(env, env.Key("k"));
         await env.Store.SetConflictOverwriteAsync(id, true, null);
 
@@ -89,15 +88,15 @@ public class RefreshTests
         Assert.StartsWith("Nothing changed", result.Describe());
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Conflict_with_overwrite_whose_existing_row_changed_gets_overwrite_reset_and_the_new_existing_hash()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var key = env.Key("k");
         var id = await StageConflictAsync(env, key);
         await env.Store.SetConflictOverwriteAsync(id, true, null);
 
-        await env.ExecuteAsync($"UPDATE dbo.Transactions SET RowHash = {HashB} WHERE PayOrderNo = {key} AND TxnRefSeqNo = {"T1"}");
+        await env.SetTransactionHashAsync(HashB, key);
         var result = await env.Store.RefreshAgainstDatabaseAsync(id);
 
         Assert.Empty(result.Moves);                                      // still a Conflict: only the choice is cleared
@@ -109,10 +108,10 @@ public class RefreshTests
         Assert.Contains("overwrite choice", result.Describe());
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Exact_duplicate_whose_existing_row_changed_becomes_Conflict_and_a_deleted_existing_row_makes_a_Conflict_New()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var keyDup = env.Key("dup");
         var dupRow = Row(2, keyDup, "T1", 5m);
         var seed = await env.NewBatchAsync();
@@ -123,8 +122,8 @@ public class RefreshTests
         Assert.Equal((byte)RowStatus.ExactDuplicate, (await StagingRowAsync(env, id, 2)).Status);
         Assert.Equal((byte)RowStatus.Conflict, (await StagingRowAsync(env, id, 3)).Status);
 
-        await env.ExecuteAsync($"UPDATE dbo.Transactions SET RowHash = {HashB} WHERE PayOrderNo = {keyDup}");
-        await env.ExecuteAsync($"DELETE FROM dbo.Transactions WHERE PayOrderNo = {keyGone}");
+        await env.SetTransactionHashAsync(HashB, keyDup);
+        await env.DeleteTransactionAsync(keyGone);
         var result = await env.Store.RefreshAgainstDatabaseAsync(id);
 
         Assert.Equal(2, result.RowsChanged);
@@ -135,10 +134,10 @@ public class RefreshTests
         Assert.Null(nowNew.ExistingRowHash);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Invalid_and_FileDuplicate_rows_are_never_touched()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var kInvalid = env.Key("bad");
         var kDup = env.Key("dup");
         var seed = await env.NewBatchAsync();
@@ -153,7 +152,7 @@ public class RefreshTests
         var before = (await StagingRowAsync(env, id, 2), await StagingRowAsync(env, id, 4));
         Assert.Equal(((byte)RowStatus.Invalid, (byte)RowStatus.FileDuplicate), (before.Item1.Status, before.Item2.Status));
 
-        await env.ExecuteAsync($"UPDATE dbo.Transactions SET RowHash = {HashB} WHERE PayOrderNo = {kInvalid} OR PayOrderNo = {kDup}");
+        await env.SetTransactionHashAsync(HashB, kInvalid, kDup);
         var result = await env.Store.RefreshAgainstDatabaseAsync(id);
 
         Assert.True(result.Success);
@@ -166,10 +165,10 @@ public class RefreshTests
         Assert.Equal(before.Item1.ErrorText, invalid.ErrorText);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Refresh_is_refused_for_a_batch_that_is_not_Staged_and_changes_nothing()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var key = env.Key("k");
         var id = await env.StageAsync(new[] { Row(2, key, "T1", 5m) });
         await env.SeedTransactionAsync(await env.NewBatchAsync(), key, "T1", HashA);       // would move New -> Conflict if it ran
@@ -180,7 +179,7 @@ public class RefreshTests
         Assert.Contains("'Discarded'", discarded.RefusalReason);
 
         var committedBatch = await env.StageAsync(new[] { Row(2, env.Key("c"), "T1", 5m) });
-        await env.ExecuteAsync($"UPDATE dbo.ImportBatches SET Status = 'Committed' WHERE Id = {committedBatch}");
+        await env.SetBatchStatusAsync(committedBatch, "Committed");
         var committed = await env.Store.RefreshAgainstDatabaseAsync(committedBatch);
         Assert.False(committed.Success);
         Assert.Contains("'Committed'", committed.RefusalReason);
@@ -191,10 +190,10 @@ public class RefreshTests
         Assert.Contains("does not exist", missing.RefusalReason);
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Refresh_touches_only_its_own_batch()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var key = env.Key("shared");
         var a = await env.StageAsync(new[] { Row(2, key, "T1", 5m) });
         var b = await env.StageAsync(new[] { Row(2, key, "T1", 5m) });                     // same key, other batch
@@ -206,10 +205,10 @@ public class RefreshTests
         Assert.Equal((byte)RowStatus.New, (await StagingRowAsync(env, b, 2)).Status);      // batch B still shows its old preview
     }
 
-    [DbFact]
+    [SkippableFact]
     public async Task Refresh_works_in_several_chunks_and_leaves_unchanged_rows_alone()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var rows = Enumerable.Range(0, 4_500).Select(i => Row(i + 2, env.Key($"r{i}"), "T1", i)).ToList();
         var id = await env.StageAsync(rows);
         var late = rows[4_400];                                         // excel row 4402: beyond the first 4,000-row chunk
@@ -226,10 +225,10 @@ public class RefreshTests
 
     // ---- conflict page flags and counts -------------------------------------------------------------------
 
-    [DbFact]
+    [SkippableFact]
     public async Task Conflict_page_returns_each_rows_overwrite_flag_and_choices_survive_paging()
     {
-        await using var env = Create();
+        await using var env = NewEnv();
         var seed = await env.NewBatchAsync();
         var rows = new List<ImportRow>();
         for (var i = 0; i < 3; i++)
