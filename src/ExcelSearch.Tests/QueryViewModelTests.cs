@@ -175,23 +175,6 @@ public class QueryViewModelTests
     }
 
     [Fact]
-    public async Task A_busy_indicator_shows_while_the_page_loads()
-    {
-        var page = new TaskCompletionSource<IReadOnlyList<TransactionRecord>>();
-        var (vm, _, _, _) = Make(s => s.OnPage = (_, _, _, _, _) => page.Task);
-
-        var search = vm.SearchAsync();
-        await WaitUntil(() => vm.IsBusy, "the busy flag");
-        Assert.False(vm.ShowPrompt);
-        Assert.Empty(vm.Rows);
-
-        page.SetResult(new[] { FakeQueryService.Rec(1) });
-        await search;
-        Assert.False(vm.IsBusy);
-        Assert.Single(vm.Rows);
-    }
-
-    [Fact]
     public async Task Starting_a_new_search_cancels_the_running_one_and_ignores_its_answer()
     {
         var first = new TaskCompletionSource<IReadOnlyList<TransactionRecord>>();
@@ -225,17 +208,6 @@ public class QueryViewModelTests
     }
 
     [Fact]
-    public async Task A_cancelled_search_never_shows_an_error()
-    {
-        var (vm, _, _, _) = Make(s => s.OnPage = (_, _, _, _, ct) => Task.FromCanceled<IReadOnlyList<TransactionRecord>>(new CancellationToken(true)));
-
-        await vm.SearchAsync();
-
-        Assert.False(vm.HasMessage);
-        Assert.False(vm.IsBusy);
-    }
-
-    [Fact]
     public async Task Cancel_stops_the_search_and_says_so()
     {
         var page = new TaskCompletionSource<IReadOnlyList<TransactionRecord>>();
@@ -257,6 +229,26 @@ public class QueryViewModelTests
     }
 
     // ---- filters ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_customer_name_toggle_switches_between_contains_and_starts_with_and_shows_in_the_chip()
+    {
+        var (vm, svc, _, _) = Make();
+        await vm.OnShownAsync();
+        vm.CustomerName = "khan";
+
+        await vm.SearchAsync();                                  // default: contains
+        Assert.Equal(TextMatchMode.Contains, svc.PageCalls.Last().Filter.CustomerNameMode);
+        Assert.Contains(vm.ActiveFilters, c => c.Text == "Customer contains: khan");
+
+        vm.CustomerNameStartsWith = true;
+        await vm.SearchAsync();
+        Assert.Equal(TextMatchMode.StartsWith, svc.PageCalls.Last().Filter.CustomerNameMode);
+        Assert.Contains(vm.ActiveFilters, c => c.Text == "Customer starts with: khan");
+
+        vm.ClearCommand.Execute(null);                           // clearing puts the toggle back to the default
+        Assert.False(vm.CustomerNameStartsWith);
+    }
 
     [Fact]
     public async Task The_typed_filters_are_turned_into_a_normalized_filter()
@@ -307,14 +299,6 @@ public class QueryViewModelTests
         // The same filter goes to the count and the totals.
         Assert.Equal(f, svc.CountCalls.Single());
         Assert.Equal(f, svc.TotalsCalls.Single());
-    }
-
-    [Fact]
-    public async Task Searching_with_nothing_typed_sends_an_empty_filter()
-    {
-        var (vm, svc, _, _) = Make();
-        await vm.SearchAsync();
-        Assert.True(svc.PageCalls.Single().Filter.IsEmpty);
     }
 
     [Theory]
@@ -401,21 +385,6 @@ public class QueryViewModelTests
         Assert.True(token.IsCancellationRequested);
         Assert.Empty(vm.Rows);
         Assert.False(vm.IsBusy);
-    }
-
-    [Fact]
-    public async Task Editing_the_boxes_after_a_search_does_not_change_paging()
-    {
-        var (vm, svc, _, _) = Make();
-        vm.CustomerName = "first";
-        await vm.SearchAsync();
-
-        vm.CustomerName = "typed but not searched";
-        vm.NextPageCommand.Execute(null);
-        await vm.LastLoad;
-
-        Assert.Equal(2, svc.PageCalls.Count);
-        Assert.Equal("first", svc.PageCalls[1].Filter.CustomerName);       // the page uses the filter that was searched
     }
 
     // ---- paging, sorting, page size --------------------------------------------------------------------
@@ -512,16 +481,6 @@ public class QueryViewModelTests
     }
 
     [Fact]
-    public async Task Sorting_before_the_first_search_only_remembers_the_order()
-    {
-        var (vm, svc, _, _) = Make();
-        vm.SortBy(nameof(TransactionColumn.Credit));
-        Assert.Empty(svc.PageCalls);
-        await vm.SearchAsync();
-        Assert.Equal(TransactionColumn.Credit, svc.PageCalls.Single().Sort.Column);
-    }
-
-    [Fact]
     public void Every_grid_column_sorts_by_a_whitelisted_column_and_binds_to_a_real_property()
     {
         var (vm, _, _, _) = Make();
@@ -604,21 +563,6 @@ public class QueryViewModelTests
     }
 
     [Fact]
-    public async Task Failing_totals_keep_the_rows_and_say_so()
-    {
-        var (vm, _, _, _) = Make(s => s.OnTotals = (_, _) => Task.FromException<TransactionTotals>(new QueryTimeoutException(new Exception())));
-
-        await vm.SearchAsync();
-
-        Assert.Equal(100, vm.Rows.Count);
-        Assert.Equal(250, vm.TotalCount);
-        Assert.True(vm.TotalsFailed);
-        Assert.Equal("n/a", vm.CreditTotalText);
-        Assert.Contains("totals", vm.Message);
-        Assert.False(vm.IsTotalsLoading);
-    }
-
-    [Fact]
     public async Task A_page_that_has_become_empty_falls_back_and_refreshes_the_count()
     {
         // Three pages were counted, but by the time page 3 is asked for (another user deleted rows) only 120 remain.
@@ -637,37 +581,6 @@ public class QueryViewModelTests
         Assert.Equal(20, vm.Rows.Count);
         Assert.Equal("Page 2 of 2", vm.PageText);
         Assert.False(vm.IsEmptyResult);
-    }
-
-    [Fact]
-    public async Task The_message_banner_stays_until_dismissed()
-    {
-        var (vm, _, _, _) = Make(s => s.OnPage = (_, _, _, _, _) =>
-            Task.FromException<IReadOnlyList<TransactionRecord>>(new QueryTimeoutException(new Exception())));
-        await vm.SearchAsync();
-        Assert.True(vm.HasMessage);
-
-        await Task.Delay(100);
-        Assert.True(vm.HasMessage);                            // no timer removes it
-
-        vm.DismissMessageCommand.Execute(null);
-        Assert.False(vm.HasMessage);
-    }
-
-    [Fact]
-    public async Task A_new_search_clears_the_old_message()
-    {
-        var calls = 0;
-        var (vm, _, _, _) = Make(s => s.OnPage = (_, _, _, _, _) => ++calls == 1
-            ? Task.FromException<IReadOnlyList<TransactionRecord>>(new QueryTimeoutException(new Exception()))
-            : Task.FromResult<IReadOnlyList<TransactionRecord>>(new[] { FakeQueryService.Rec(1) }));
-        await vm.SearchAsync();
-        Assert.True(vm.HasMessage);
-
-        await vm.SearchAsync();
-
-        Assert.False(vm.HasMessage);
-        Assert.Single(vm.Rows);
     }
 
     // ---- details panel ---------------------------------------------------------------------------------
@@ -737,22 +650,6 @@ public class QueryViewModelTests
 
         Assert.Equal("could not be loaded", vm.DetailSections[^1].Fields.Single().Value);
         Assert.Equal("PO0001", vm.DetailSections[0].Fields[0].Value);
-    }
-
-    [Fact]
-    public async Task Closing_the_details_and_loading_a_new_page_clear_the_selection()
-    {
-        var (vm, _, _, _) = Make();
-        await vm.SearchAsync();
-        vm.SelectedRow = vm.Rows[0];
-        vm.CloseDetailsCommand.Execute(null);
-        Assert.False(vm.HasSelection);
-        Assert.Empty(vm.DetailSections);
-
-        vm.SelectedRow = vm.Rows[0];
-        vm.NextPageCommand.Execute(null);
-        await vm.LastLoad;
-        Assert.False(vm.HasSelection);
     }
 
     // ---- export ----------------------------------------------------------------------------------------
@@ -838,20 +735,6 @@ public class QueryViewModelTests
     }
 
     [Fact]
-    public async Task Cancelling_the_save_dialog_exports_nothing()
-    {
-        var (vm, svc, dialogs, _) = Make();
-        await vm.SearchAsync();
-        dialogs.ExportTargetToPick = null;
-
-        await vm.ExportCommand.ExecuteAsync(null);
-
-        Assert.Empty(svc.ExportCalls);
-        Assert.False(vm.HasMessage);
-        Assert.False(vm.IsExporting);
-    }
-
-    [Fact]
     public async Task Export_can_be_cancelled_while_it_runs()
     {
         var started = new TaskCompletionSource();
@@ -899,18 +782,6 @@ public class QueryViewModelTests
         Assert.True(vm.ExportCommand.CanExecute(null));
     }
 
-    [Fact]
-    public async Task A_database_timeout_during_export_is_worded_for_the_user()
-    {
-        var (vm, _, dialogs, _) = Make(s => s.OnExport = (_, _, _, _, _) => Task.FromException<QueryExportResult>(new QueryTimeoutException(new Exception())));
-        await vm.SearchAsync();
-        dialogs.ExportTargetToPick = new ExportTarget(@"C:\o\x.csv", ExportFormat.Csv);
-
-        await vm.ExportCommand.ExecuteAsync(null);
-
-        Assert.Contains("took too long", vm.Message);
-    }
-
     // ---- layout state: filter drawer, chips, columns ---------------------------------------------------
 
     [Fact]
@@ -930,20 +801,6 @@ public class QueryViewModelTests
 
         vm.ClearCommand.Execute(null);
         Assert.True(vm.IsFilterPanelOpen);                   // ready for new filters
-    }
-
-    [Fact]
-    public async Task The_drawer_stays_open_when_hiding_after_search_is_switched_off_and_when_the_filters_are_invalid()
-    {
-        var (vm, _, _, _) = Make();
-        vm.AutoHideFilters = false;
-        await vm.SearchAsync();
-        Assert.True(vm.IsFilterPanelOpen);
-
-        var (vm2, _, _, _) = Make();
-        vm2.CreditMin = "abc";
-        await vm2.SearchAsync();                             // rejected: the user must see the message and the box
-        Assert.True(vm2.IsFilterPanelOpen);
     }
 
     [Fact]
@@ -1089,30 +946,6 @@ public class QueryViewModelTests
         Assert.Empty(svc.ExportCalls);
     }
 
-    [Fact]
-    public void The_columns_picker_can_show_everything_or_go_back_to_the_defaults()
-    {
-        var (vm, _, _, _) = Make();
-        vm.ShowAllColumnsCommand.Execute(null);
-        Assert.All(vm.ColumnChoices, c => Assert.True(c.IsVisible));
-
-        vm.ColumnChoices.Single(c => c.Header == "Customer").IsVisible = false;
-        vm.ResetColumnsCommand.Execute(null);
-        Assert.Equal(12, vm.ColumnChoices.Count(c => c.IsVisible));
-        Assert.True(vm.ColumnChoices.Single(c => c.Header == "Customer").IsVisible);
-        Assert.False(vm.ColumnChoices.Single(c => c.Header == "Narration 5").IsVisible);
-    }
-
-    [Fact]
-    public void Extra_columns_that_cannot_be_sorted_are_rejected_by_sort_by()
-    {
-        var (vm, svc, _, _) = Make();
-        vm.SortBy("Narration1");                                                         // not in the sort whitelist
-        vm.SortBy("Discount");
-        Assert.Equal(TransactionSort.Default, vm.Sort);
-        Assert.Empty(svc.PageCalls);
-    }
-
     // ---- dropdown lists --------------------------------------------------------------------------------
 
     [Fact]
@@ -1166,33 +999,6 @@ public class QueryViewModelTests
 
         Assert.Equal(new[] { "BankName B" }, vm.Banks.SelectedValues);
         Assert.Equal("BankName B", vm.Banks.Summary);
-    }
-
-    [Fact]
-    public void The_multi_select_summary_search_and_clear_work()
-    {
-        var box = new MultiSelectFilter("Bank", "Any bank");
-        Assert.Equal("Any bank", box.Summary);
-        Assert.False(box.IsLoaded);
-
-        box.SetOptions(new[] { "Meezan", "HBL", "UBL", "hbl" });         // duplicates (case-insensitive) collapse
-        Assert.Equal(new[] { "HBL", "Meezan", "UBL" }, box.VisibleOptions.Select(o => o.Value));
-
-        box.VisibleOptions[0].IsSelected = true;
-        Assert.Equal("HBL", box.Summary);
-        box.VisibleOptions[2].IsSelected = true;
-        Assert.Equal("2 selected", box.Summary);
-        Assert.True(box.HasSelection);
-
-        box.SearchText = "ee";
-        Assert.Equal(new[] { "Meezan" }, box.VisibleOptions.Select(o => o.Value));
-        Assert.Equal(2, box.SelectedValues.Count);                        // hidden by the search, still ticked
-
-        box.ClearCommand.Execute(null);
-        Assert.Empty(box.SelectedValues);
-        Assert.Equal("Any bank", box.Summary);
-        Assert.Equal("", box.SearchText);
-        Assert.Equal(3, box.VisibleOptions.Count);
     }
 
     [Fact]

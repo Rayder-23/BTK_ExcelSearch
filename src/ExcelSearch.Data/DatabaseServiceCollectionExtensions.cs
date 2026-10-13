@@ -12,7 +12,7 @@ public static class DatabaseServiceCollectionExtensions
     /// <summary>
     /// Registers the database for the configured provider: the context factory, the staging store and the query service. This is the
     /// one place that knows which provider is in use; everything else depends on the interfaces and the context factory.
-    /// (SQLite gets a placeholder query service until the Query screen is ported.) A restart is needed to switch provider.
+    /// A restart is needed to switch provider.
     /// </summary>
     /// <param name="sqlServerConnectionString">Used when the provider is SQL Server; ignored for SQLite.</param>
     public static IServiceCollection AddExcelSearchDatabase(this IServiceCollection services, DatabaseOptions database,
@@ -29,7 +29,7 @@ public static class DatabaseServiceCollectionExtensions
                 services.AddDbContextFactory<AppDbContext>((sp, options) =>
                     options.UseSqlite(connectionString).AddInterceptors(sp.GetRequiredService<SqlitePragmaInterceptor>()));
                 services.AddSingleton<IStagingStore, SqliteStagingStore>();
-                services.AddSingleton<ITransactionQueryService, UnavailableTransactionQueryService>();
+                services.AddSingleton<ITransactionQueryService, SqliteTransactionQueryService>();
                 break;
 
             default:

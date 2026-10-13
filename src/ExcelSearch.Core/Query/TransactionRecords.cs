@@ -89,3 +89,10 @@ public sealed class QueryTimeoutException : Exception
 {
     public QueryTimeoutException(Exception inner) : base("The search took too long and was stopped.", inner) { }
 }
+
+/// <summary>Texts the screen shows about exports.</summary>
+public static class ExportNotes
+{
+    /// <summary>Shown next to the CSV choice and after a CSV export: Excel turns "00123" into 123 when it opens a CSV.</summary>
+    public const string CsvLeadingZeros = "Excel may drop leading zeros when opening CSV files; use the Excel export for that.";
+}

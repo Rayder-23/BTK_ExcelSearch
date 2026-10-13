@@ -1,5 +1,6 @@
 using ExcelSearch.Core.Query;
 using ExcelSearch.Data;
+using ExcelSearch.Data.Sqlite;
 using ExcelSearch.Data.SqlServer;
 using ExcelSearch.Data.Entities;
 
@@ -73,7 +74,15 @@ internal static class QuerySeed
         await db.SaveChangesAsync();
     }
 
-    public static SqlTransactionQueryService Service(StagingEnv env) => new(env.Factory);
+    /// <summary>The query service of the env's provider (SQL Server or SQLite), with the normal limits.</summary>
+    public static TransactionQueryServiceBase Service(StagingEnv env) => Create(env);
+
+    /// <summary>The query service of the env's provider, with the knobs the tests turn (clock, cache lifetime, time limit, sheet size).</summary>
+    public static TransactionQueryServiceBase Create(StagingEnv env, TimeProvider? clock = null, TimeSpan? distinctCacheLifetime = null,
+        int commandTimeoutSeconds = QueryLimits.CommandTimeoutSeconds, int maxExcelDataRows = QueryLimits.MaxExcelDataRows) =>
+        env.IsSqlite
+            ? new SqliteTransactionQueryService(env.Factory, null, clock, distinctCacheLifetime, commandTimeoutSeconds, maxExcelDataRows)
+            : new SqlTransactionQueryService(env.Factory, null, clock, distinctCacheLifetime, commandTimeoutSeconds, maxExcelDataRows);
 }
 
 /// <summary>A clock the test can move forward, to prove the dropdown cache expires.</summary>

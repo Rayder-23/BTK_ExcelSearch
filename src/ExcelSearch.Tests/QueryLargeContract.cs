@@ -11,13 +11,15 @@ using Xunit.Abstractions;
 namespace ExcelSearch.Tests;
 
 /// <summary>
-/// Skipped unless EXCELSEARCH_RUN_LARGE=1. Seeds 500,000 TEST_ rows through the normal stage -> classify -> commit path,
+/// Written once, run on both providers (shells in ContractTestShells.cs). Skipped unless EXCELSEARCH_RUN_LARGE=1. Seeds 500,000 TEST_ rows through the normal stage -> classify -> commit path,
 /// times the Query screen's searches against them, then times RefreshAgainstDatabaseAsync and GetConflictPageAsync on a
 /// 200,000-row batch of mostly conflicting rows. Everything it created is deleted afterwards (StagingEnv does the chunked
 /// deletes by TEST_ prefix). The report is printed and also written to %TEMP%\ExcelSearch_query_large_report.txt.
 /// </summary>
-public class QueryLargeTests
+public abstract class QueryLargeContract
 {
+    protected abstract StagingEnv NewEnv(bool large = false);
+
     private const int Batches = 5;
     private const int RowsPerBatch = 100_000;
     private const int ConflictBatchRows = 200_000;
@@ -40,8 +42,9 @@ public class QueryLargeTests
 
     private readonly ITestOutputHelper _output;
     private readonly StringBuilder _report = new();
+    private string ReportName => GetType().Name.EndsWith("Sqlite") ? "sqlite" : "sqlserver";
 
-    public QueryLargeTests(ITestOutputHelper output) => _output = output;
+    protected QueryLargeContract(ITestOutputHelper output) => _output = output;
 
     private void Say(string line)
     {
@@ -129,7 +132,7 @@ public class QueryLargeTests
     private static string Mb(long bytes) => $"{bytes / 1024.0 / 1024.0:0} MB";
 
     private async Task<(double Page, double Count, double Totals, double Parallel, int Rows, int Total, string Note)> TimeSearchAsync(
-        SqlTransactionQueryService svc, TransactionFilter filter, TransactionSort sort)
+        TransactionQueryServiceBase svc, TransactionFilter filter, TransactionSort sort)
     {
         double page = 0, count = 0, totals = 0, parallel = 0;
         var rows = 0;
@@ -171,10 +174,10 @@ public class QueryLargeTests
 
     // ---- the test --------------------------------------------------------------------------------------
 
-    [LargeDbFact]
+    [SkippableFact, Trait("Category", "Large")]
     public async Task Query_screen_timings_at_500000_rows_and_refresh_and_conflict_paging_at_200000()
     {
-        await using var env = StagingEnv.Create();
+        await using var env = NewEnv(large: true);
         var svc = QuerySeed.Service(env);
         var p = env.Prefix;
         var total = Stopwatch.StartNew();
@@ -182,7 +185,7 @@ public class QueryLargeTests
         try
         {
             // ===== 1. Seed 500,000 rows through the normal stage -> classify -> commit path =====
-            Say($"# Query screen, large run ({DateTime.Now:yyyy-MM-dd HH:mm})");
+            Say($"# Query screen, large run on {env.ProviderName} ({DateTime.Now:yyyy-MM-dd HH:mm})");
             Say("");
             Say($"## 1. Seeding {Batches * RowsPerBatch:N0} rows ({Batches} batches of {RowsPerBatch:N0}) through stage + commit");
             var seedWatch = Stopwatch.StartNew();
@@ -202,7 +205,7 @@ public class QueryLargeTests
                 Say($"- batch {b + 1}: load {loadSec:0.0} s, classify {classifySec:0.0} s, commit {sw.Elapsed.TotalSeconds:0.0} s ({load.RowsLoaded:N0} rows)");
             }
             Assert.Equal(Batches * RowsPerBatch, await env.CountTransactionsWithPrefixAsync());
-            Say($"- seeded and committed in {seedWatch.Elapsed.TotalSeconds:0} s; {await env.CountAllTransactionsAsync():N0} rows now in dbo.Transactions");
+            Say($"- seeded and committed in {seedWatch.Elapsed.TotalSeconds:0} s; {await env.CountAllTransactionsAsync():N0} rows now in Transactions");
             Say("");
 
             // ===== 2. Query timings =====
@@ -344,7 +347,7 @@ public class QueryLargeTests
         }
         finally
         {
-            File.WriteAllText(Path.Combine(Path.GetTempPath(), "ExcelSearch_query_large_report.txt"), _report.ToString());
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), $"ExcelSearch_query_large_report_{ReportName}.txt"), _report.ToString());
         }
     }
 }

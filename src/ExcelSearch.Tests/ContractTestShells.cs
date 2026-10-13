@@ -31,6 +31,7 @@ public static class ContractEnv
     }
 }
 
+[Trait("Category", "Integration")]
 public sealed class StagingStoreTests_SqlServer : StagingStoreContract
 {
     public StagingStoreTests_SqlServer(ITestOutputHelper output) : base(output) { }
@@ -44,6 +45,7 @@ public sealed class StagingStoreTests_Sqlite : StagingStoreContract, IClassFixtu
     protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
 }
 
+[Trait("Category", "Integration")]
 public sealed class ImportPreviewTests_SqlServer : ImportPreviewContract
 {
     protected override StagingEnv NewEnv(bool large = false) => ContractEnv.SqlServer(large);
@@ -56,6 +58,7 @@ public sealed class ImportPreviewTests_Sqlite : ImportPreviewContract, IClassFix
     protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
 }
 
+[Trait("Category", "Integration")]
 public sealed class CommitTests_SqlServer : CommitContract
 {
     public CommitTests_SqlServer(ITestOutputHelper output) : base(output) { }
@@ -69,6 +72,7 @@ public sealed class CommitTests_Sqlite : CommitContract, IClassFixture<SqliteDat
     protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
 }
 
+[Trait("Category", "Integration")]
 public sealed class RefreshTests_SqlServer : RefreshContract
 {
     protected override StagingEnv NewEnv(bool large = false) => ContractEnv.SqlServer(large);
@@ -81,6 +85,7 @@ public sealed class RefreshTests_Sqlite : RefreshContract, IClassFixture<SqliteD
     protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
 }
 
+[Trait("Category", "Integration")]
 public sealed class ExportDbTests_SqlServer : ExportContract
 {
     public ExportDbTests_SqlServer(ITestOutputHelper output) : base(output) { }
@@ -91,5 +96,32 @@ public sealed class ExportDbTests_Sqlite : ExportContract, IClassFixture<SqliteD
 {
     private readonly SqliteDatabaseFixture _db;
     public ExportDbTests_Sqlite(ITestOutputHelper output, SqliteDatabaseFixture db) : base(output) => _db = db;
+    protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
+}
+
+[Trait("Category", "Integration")]
+public sealed class QueryServiceTests_SqlServer : QueryServiceContract
+{
+    protected override StagingEnv NewEnv(bool large = false) => ContractEnv.SqlServer(large);
+}
+
+public sealed class QueryServiceTests_Sqlite : QueryServiceContract, IClassFixture<SqliteDatabaseFixture>
+{
+    private readonly SqliteDatabaseFixture _db;
+    public QueryServiceTests_Sqlite(SqliteDatabaseFixture db) => _db = db;
+    protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
+}
+
+[Trait("Category", "Integration")]
+public sealed class QueryLargeTests_SqlServer : QueryLargeContract
+{
+    public QueryLargeTests_SqlServer(ITestOutputHelper output) : base(output) { }
+    protected override StagingEnv NewEnv(bool large = false) => ContractEnv.SqlServer(large);
+}
+
+public sealed class QueryLargeTests_Sqlite : QueryLargeContract, IClassFixture<SqliteDatabaseFixture>
+{
+    private readonly SqliteDatabaseFixture _db;
+    public QueryLargeTests_Sqlite(ITestOutputHelper output, SqliteDatabaseFixture db) : base(output) => _db = db;
     protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
 }

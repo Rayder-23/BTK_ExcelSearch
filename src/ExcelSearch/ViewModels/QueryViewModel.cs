@@ -87,6 +87,9 @@ public sealed partial class QueryViewModel : ObservableObject
     [ObservableProperty] private DateTime? _valueDateTo;
     [ObservableProperty] private string _customerName = "";
 
+    /// <summary>Off (default) = the name contains what was typed; on = the name starts with it (can use the name index on SQL Server).</summary>
+    [ObservableProperty] private bool _customerNameStartsWith;
+
     public TextFilterInput Cnic { get; }
     public TextFilterInput ApplicationNo { get; }
     public TextFilterInput PayOrderNo { get; }
@@ -280,6 +283,7 @@ public sealed partial class QueryViewModel : ObservableObject
         ValueDateFrom = null;
         ValueDateTo = null;
         CustomerName = "";
+        CustomerNameStartsWith = false;
         foreach (var t in new[] { Cnic, ApplicationNo, PayOrderNo, TxnRefSeqNo, RegNo, ChallanNo, ChequeInstNo, AccountNo }) t.Clear();
         foreach (var m in new[] { Banks, Projects, Dealers, Branches, DataSources }) m.Clear();
         CreditMin = CreditMax = DebitMin = DebitMax = DownPaymentMin = DownPaymentMax = ImportBatchText = "";
@@ -356,6 +360,7 @@ public sealed partial class QueryViewModel : ObservableObject
             ChequeInstNo = ChequeInstNo.Criterion,
             AccountNo = AccountNo.Criterion,
             CustomerName = CustomerName,
+            CustomerNameMode = CustomerNameStartsWith ? TextMatchMode.StartsWith : TextMatchMode.Contains,
             BankNames = Banks.SelectedValues,
             Projects = Projects.SelectedValues,
             DealerNames = Dealers.SelectedValues,
@@ -408,7 +413,8 @@ public sealed partial class QueryViewModel : ObservableObject
                 () => { ValueDateFrom = null; ValueDateTo = null; }));
 
         if (f.CustomerName is { } name)
-            chips.Add(new FilterChip($"Customer contains: {name}", () => CustomerName = ""));
+            chips.Add(new FilterChip($"Customer {(f.CustomerNameMode == TextMatchMode.StartsWith ? "starts with" : "contains")}: {name}",
+                () => { CustomerName = ""; CustomerNameStartsWith = false; }));
 
         void Text(TextFilterInput input, TextCriterion c)
         {
@@ -801,7 +807,8 @@ public sealed partial class QueryViewModel : ObservableObject
                 return;
             }
 
-            Message = $"Exported {result.RowsWritten:N0} rows to {result.DestinationPath}.";
+            Message = $"Exported {result.RowsWritten:N0} rows to {result.DestinationPath}." +
+                      (result.Format == ExportFormat.Csv ? " " + ExportNotes.CsvLeadingZeros : "");
             if (_dialogs.Confirm(AppTitle, $"Exported {result.RowsWritten:N0} rows.\n\n{result.DestinationPath}\n\nOpen the folder?"))
                 _dialogs.OpenFolder(result.DestinationPath!);
         }

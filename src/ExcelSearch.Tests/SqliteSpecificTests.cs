@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ExcelSearch.Core.Query;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Data;
 using ExcelSearch.Data.Entities;
@@ -173,6 +174,30 @@ public class SqliteSpecificTests : IClassFixture<SqliteDatabaseFixture>
         Assert.Equal(1, counts[RowStatus.ExactDuplicate]);
         Assert.Equal(1, counts[RowStatus.New]);
         Assert.Equal(2, Assert.Single((await env.Store.GetPageAsync(id, RowStatus.ExactDuplicate, 1, 10)).Rows).ExcelRowNumber);
+    }
+
+    [Fact]
+    public async Task Text_search_matches_percent_underscore_and_backslash_literally_and_ignores_ascii_case()
+    {
+        await using var env = NewEnv();
+        var batch = await env.NewBatchAsync();
+        var names = new[] { "100% Owner_X", "Owner X", "50 percent", @"C:\Tempile", "ALICE Khan" };
+        await using (var db = await env.Factory.CreateDbContextAsync())
+        {
+            db.Transactions.AddRange(names.Select((n, i) => { var t = Tx(env, batch, "n" + i); t.CustomerName = n; return t; }));
+            await db.SaveChangesAsync();
+        }
+        var svc = new ExcelSearch.Data.Sqlite.SqliteTransactionQueryService(env.Factory);
+        async Task<string[]> Find(string text, TextMatchMode mode = TextMatchMode.Contains) =>
+            (await svc.GetPageAsync(new TransactionFilter { ImportBatchId = batch, CustomerName = text, CustomerNameMode = mode },
+                TransactionSort.Default, 1, 50)).Select(r => r.CustomerName!).OrderBy(x => x).ToArray();
+
+        Assert.Equal(new[] { "100% Owner_X" }, await Find("%"));                 // % is not "match anything"
+        Assert.Equal(new[] { "100% Owner_X" }, await Find("r_X"));               // _ is not "any one character" (Owner X must not match)
+        Assert.Equal(new[] { @"C:\Tempile" }, await Find(@"\"));             // the escape character itself
+        Assert.Equal(new[] { "ALICE Khan" }, await Find("alice", TextMatchMode.StartsWith));   // case-insensitive
+        Assert.Equal(new[] { "ALICE Khan" }, await Find("khan"));
+        Assert.Empty(await Find("lice", TextMatchMode.StartsWith));
     }
 
     // ---- stored forms of dates, timestamps and ids ----------------------------------------------------------------

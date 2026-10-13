@@ -1,7 +1,10 @@
 namespace ExcelSearch.Core.Query;
 
-/// <summary>How a text filter compares: "starts with" (the default, fast: it can use an index) or the whole value.</summary>
-public enum TextMatchMode { StartsWith, Exact }
+/// <summary>
+/// How a text filter compares: "starts with" (the default for reference numbers, fast: it can use an index), the whole value, or
+/// "contains" (anywhere in the text; only the customer name offers it).
+/// </summary>
+public enum TextMatchMode { StartsWith, Exact, Contains }
 
 /// <summary>One text filter box: what was typed plus how to match it.</summary>
 public readonly record struct TextCriterion(string? Value, TextMatchMode Mode = TextMatchMode.StartsWith)
@@ -34,8 +37,11 @@ public sealed record TransactionFilter
     public TextCriterion ChequeInstNo { get; init; }
     public TextCriterion AccountNo { get; init; }
 
-    /// <summary>Matches anywhere inside the name (Contains).</summary>
+    /// <summary>The customer name typed, matched according to <see cref="CustomerNameMode"/>.</summary>
     public string? CustomerName { get; init; }
+
+    /// <summary>Contains (the default: anywhere in the name) or StartsWith (can use the name index on SQL Server).</summary>
+    public TextMatchMode CustomerNameMode { get; init; } = TextMatchMode.Contains;
 
     // Multi-select lists: a row matches when its value equals ANY of the selected ones. Empty = no restriction.
     public IReadOnlyList<string> BankNames { get; init; } = Array.Empty<string>();
@@ -72,6 +78,8 @@ public sealed record TransactionFilter
         ChequeInstNo = Clean(ChequeInstNo),
         AccountNo = Clean(AccountNo),
         CustomerName = string.IsNullOrWhiteSpace(CustomerName) ? null : CustomerName.Trim(),
+        // Only StartsWith and Contains make sense for a name; with no name typed the mode is the default, so "no filter" has one form.
+        CustomerNameMode = string.IsNullOrWhiteSpace(CustomerName) || CustomerNameMode != TextMatchMode.StartsWith ? TextMatchMode.Contains : TextMatchMode.StartsWith,
         BankNames = CleanList(BankNames),
         Projects = CleanList(Projects),
         DealerNames = CleanList(DealerNames),
@@ -105,7 +113,7 @@ public sealed record TransactionFilter
     private string Key() => string.Join('\u001F', new object?[]
     {
         ValueDateFrom, ValueDateTo, Cnic, ApplicationNo, RegNo, PayOrderNo, TxnRefSeqNo, ChallanNo, ChequeInstNo, AccountNo,
-        CustomerName, string.Join('\u001E', BankNames), string.Join('\u001E', Projects), string.Join('\u001E', DealerNames),
+        CustomerName, CustomerNameMode, string.Join('\u001E', BankNames), string.Join('\u001E', Projects), string.Join('\u001E', DealerNames),
         string.Join('\u001E', BranchNames), string.Join('\u001E', DataSources),
         CreditMin, CreditMax, DebitMin, DebitMax, DownPaymentMin, DownPaymentMax, ImportBatchId,
     });

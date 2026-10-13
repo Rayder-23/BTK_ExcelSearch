@@ -219,7 +219,12 @@
                             </Grid>
 
                             <StackPanel Style="{StaticResource FilterRow}">
-                                <TextBlock Text="Customer name (contains)" Style="{StaticResource FilterLabel}" />
+                                <DockPanel Margin="1,0,0,4">
+                                    <ToggleButton DockPanel.Dock="Right" Content="starts with" IsChecked="{Binding CustomerNameStartsWith, Mode=TwoWay}" Style="{StaticResource ModeToggle}"
+                                                  ToolTip="Off: the name contains what you typed. On: the name starts with it (faster on SQL Server)."
+                                                  AutomationProperties.AutomationId="CustomerNameStartsWith" />
+                                    <TextBlock Text="Customer name" Style="{StaticResource FilterLabel}" VerticalAlignment="Center" />
+                                </DockPanel>
                                 <TextBox Style="{StaticResource FilterTextBox}" Text="{Binding CustomerName, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.AutomationId="CustomerName" />
                             </StackPanel>
 

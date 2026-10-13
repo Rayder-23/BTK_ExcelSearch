@@ -26,11 +26,7 @@ public partial class ShellViewModel : ObservableObject
         Import = import;
         Query = query;
 
-        // The Query screen is only built on SQL Server so far; with the local SQLite database its entry stays disabled.
-        var queryItem = database.IsSqlite
-            ? new NavItem("Query", null, "Not yet available for Local DB.")
-            : new NavItem("Query", query);
-        NavItems = new[] { new NavItem("Import", import), queryItem };
+        NavItems = new[] { new NavItem("Import", import), new NavItem("Query", query) };
         DatabaseLabel = database.IsSqlite ? LocalDb : SqlServer;
         IsLocalDb = database.IsSqlite;
         DatabaseFilePath = database.IsSqlite ? database.ResolveSqlitePath() : "";

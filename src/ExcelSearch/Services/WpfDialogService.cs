@@ -30,11 +30,13 @@ public sealed class WpfDialogService : IDialogService
         return ok == true ? dialog.FileName : null;
     }
 
+    private static readonly string CsvChoice = "CSV file (*.csv) - " + Core.Query.ExportNotes.CsvLeadingZeros;
+
     public ExportTarget? PickExportPath(string suggestedName, bool allowExcel)
     {
         var dialog = new SaveFileDialog
         {
-            Filter = allowExcel ? "Excel workbook (*.xlsx)|*.xlsx|CSV file (*.csv)|*.csv" : "CSV file (*.csv)|*.csv",
+            Filter = allowExcel ? $"Excel workbook (*.xlsx)|*.xlsx|{CsvChoice}|*.csv" : $"{CsvChoice}|*.csv",
             Title = "Export results",
             FileName = suggestedName,
             AddExtension = true,
