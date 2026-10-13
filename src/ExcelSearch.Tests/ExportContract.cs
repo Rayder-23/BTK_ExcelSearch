@@ -93,7 +93,7 @@ public abstract class ExportContract : IDisposable
         Assert.True(o.Cell(2, 1).IsEmpty());
     }
 
-    [SkippableFact]
+    [SkippableFact, Trait("Category", "Large")]
     public async Task Exports_100k_invalid_rows_from_a_200k_row_file_and_reports_time_and_memory()
     {
         await using var env = NewEnv(large: true);

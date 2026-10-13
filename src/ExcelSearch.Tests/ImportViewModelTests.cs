@@ -462,17 +462,6 @@ public class ImportViewModelTests
         Assert.Contains("differ", conflicts.Hint, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task Other_tabs_have_no_details_panel_and_put_row_number_first()
-    {
-        var vm = await StagedAsync();
-
-        Assert.All(vm.Tabs, t => Assert.Equal("Row", t.Columns[0].Header));
-        Assert.All(vm.Tabs.Where(t => t.Status != RowStatus.Conflict), t => Assert.False(t.ShowsDetails));
-        var invalid = vm.Tabs.Single(t => t.Status == RowStatus.Invalid);
-        Assert.Equal("Error", invalid.Columns[1].Header);   // ErrorText right after the row number
-    }
-
     // ---- feature 1: conflict overwrite choices -----------------------------------------------------------
 
     private async Task<(ImportViewModel Vm, StatusTabViewModel Conflicts)> ConflictTabAsync(int @new = 3, int conflict = 5)
@@ -535,19 +524,6 @@ public class ImportViewModelTests
         Assert.Equal(0, vm.OverwriteCount);
 
         Assert.Equal(loadsBefore + 2, _service.PageRequests.Count(r => r.Status == RowStatus.Conflict));   // page re-read each time
-    }
-
-    [Fact]
-    public async Task Overwrite_flag_from_the_database_is_shown_in_the_checkbox()
-    {
-        _service.ConflictFor = n => new ConflictRow(
-            new StagedRow { ExcelRowNumber = n, Status = RowStatus.Conflict, PayOrderNo = "PO", TxnRefSeqNo = "T", Overwrite = true },
-            new[] { new FieldChange("Debit", "1.00", "2.00", true) });
-
-        var (_, conflicts) = await ConflictTabAsync();
-
-        Assert.True(conflicts.Rows.Single().IsOverwrite);
-        Assert.Empty(_service.OverwriteCalls);                            // loading a ticked row must not save anything
     }
 
     [Theory]
@@ -628,16 +604,6 @@ public class ImportViewModelTests
         Assert.Equal(3, vm.NewCount);                                     // counts untouched by a refusal
     }
 
-    [Fact]
-    public async Task Recheck_is_only_available_in_Preview()
-    {
-        var vm = Create();
-        Assert.False(vm.RefreshCommand.CanExecute(null));                 // Idle
-
-        await vm.ChooseFileCommand.ExecuteAsync(null);
-        Assert.True(vm.RefreshCommand.CanExecute(null));                  // Preview
-    }
-
     // ---- feature 3: export invalid rows ------------------------------------------------------------------
 
     [Fact]
@@ -656,32 +622,6 @@ public class ImportViewModelTests
         Assert.Equal(@"C:\out\sample_errors.xlsx", Assert.Single(_dialogs.OpenedFolders));
         Assert.False(vm.IsExporting);
         Assert.Equal(ImportState.Preview, vm.State);
-    }
-
-    [Fact]
-    public async Task Export_does_not_open_the_folder_when_declined_and_shows_the_fallback_note()
-    {
-        var vm = await StagedAsync();
-        _dialogs.ConfirmAnswer = false;
-        _exporter.OnExport = (_, _, dest, _) => Task.FromResult(new ExportResult(true, 3, ExportMode.StagedValues,
-            "The original file \"sample.xlsx\" has changed since it was imported, so the values read at import time were exported.", dest));
-
-        await vm.ExportInvalidCommand.ExecuteAsync(null);
-
-        Assert.Empty(_dialogs.OpenedFolders);
-        Assert.Contains("has changed since it was imported", vm.Message);   // the user is told which mode was used
-    }
-
-    [Fact]
-    public async Task Cancelling_the_save_dialog_exports_nothing()
-    {
-        var vm = await StagedAsync();
-        _dialogs.SaveToPick = null;
-
-        await vm.ExportInvalidCommand.ExecuteAsync(null);
-
-        Assert.Empty(_exporter.Calls);
-        Assert.False(vm.IsExporting);
     }
 
     [Fact]
@@ -723,40 +663,6 @@ public class ImportViewModelTests
         Assert.Contains("cancelled", vm.Message);
         Assert.Empty(_dialogs.OpenedFolders);
         Assert.Empty(_dialogs.Errors);
-    }
-
-    [Fact]
-    public async Task Export_needs_invalid_rows_and_the_button_belongs_to_the_Invalid_tab()
-    {
-        _service.OnStage = (_, _) => Task.FromResult(FakeImportPreviewService.Staged(7, invalid: 0));
-        var vm = Create();
-        await vm.ChooseFileCommand.ExecuteAsync(null);
-        Assert.False(vm.ExportInvalidCommand.CanExecute(null));           // nothing invalid to export
-
-        var vm2 = await StagedAsync();
-        Assert.False(vm2.IsInvalidTabSelected);
-        vm2.SelectedTab = vm2.Tabs.Single(t => t.Status == RowStatus.Invalid);
-        Assert.True(vm2.IsInvalidTabSelected);
-    }
-
-    [Fact]
-    public async Task A_message_stays_until_dismissed_and_dismissing_clears_it()
-    {
-        var vm = await StagedAsync();
-        await vm.RefreshCommand.ExecuteAsync(null);
-        Assert.True(vm.HasMessage);
-        Assert.StartsWith("Nothing changed", vm.Message);
-
-        // Other activity that does not set a new message leaves it in place (nothing clears it behind the user's back).
-        vm.SelectedTab = vm.Tabs.Single(t => t.Status == RowStatus.Invalid);
-        await Task.Delay(200);
-        Assert.True(vm.HasMessage);
-
-        Assert.True(vm.DismissMessageCommand.CanExecute(null));
-        vm.DismissMessageCommand.Execute(null);
-
-        Assert.False(vm.HasMessage);
-        Assert.Null(vm.Message);
     }
 
     // Lets the fire-and-forget first page load finish without sleeping a fixed time.

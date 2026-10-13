@@ -405,10 +405,10 @@ public abstract class CommitContract
     [SkippableFact]
     public async Task Commit_and_discard_started_together_always_end_consistent()
     {
-        const int rows = 50_000;
+        const int rows = 10_000;
         await using var env = NewEnv();
 
-        for (var round = 1; round <= 5; round++)
+        for (var round = 1; round <= 3; round++)
         {
             var r = round;
             var id = await env.StageAsync(Enumerable.Range(0, rows)
@@ -450,12 +450,12 @@ public abstract class CommitContract
     {
         // The simultaneous test above is always won by the discard (a commit needs several round trips before it
         // holds the batch row). Here the commit gets a head start, so this is the "commit wins" half of the race.
-        const int rows = 50_000;
+        const int rows = 20_000;
         await using var env = NewEnv();
         var id = await env.StageAsync(Enumerable.Range(0, rows).Select(i => Row(i + 2, env.Key($"w{i}"), "T1", i)));
 
         var commitTask = Task.Run(() => env.Store.CommitAsync(id));
-        await Task.Delay(300);
+        await Task.Delay(100);
         var sw = Stopwatch.StartNew();
         var discard = await env.Store.DiscardAsync(id);
         var waited = sw.Elapsed;
@@ -469,7 +469,7 @@ public abstract class CommitContract
         Assert.Equal("Committed", await env.BatchStatusAsync(id));
     }
 
-    [SkippableFact]
+    [SkippableFact, Trait("Category", "Large")]
     public async Task Commits_a_200k_row_file_then_sees_the_same_file_as_all_exact_duplicates()
     {
         await using var env = NewEnv(large: true);

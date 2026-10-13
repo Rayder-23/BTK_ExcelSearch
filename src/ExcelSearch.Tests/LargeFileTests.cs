@@ -18,6 +18,7 @@ public sealed class LargeFactAttribute : FactAttribute
     }
 }
 
+[Trait("Category", "Large")]
 public class LargeFileTests
 {
     private const int RowCount = 200_000;

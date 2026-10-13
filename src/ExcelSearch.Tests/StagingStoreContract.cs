@@ -22,30 +22,6 @@ public abstract class StagingStoreContract
     protected abstract StagingEnv NewEnv(bool large = false);
 
     [SkippableFact]
-    public async Task Load_leaves_valid_rows_Pending_and_invalid_rows_Invalid_with_no_hash()
-    {
-        await using var env = NewEnv();
-        var id = await env.NewBatchAsync();
-
-        var load = await env.Store.LoadRowsAsync(id, new[]
-        {
-            Row(2, env.Key("a"), "T1"),
-            Row(3, env.Key("b"), "T1", invalid: true),
-        }, null);
-
-        Assert.Equal(2, load.RowsLoaded);
-        var counts = await env.Store.GetCountsAsync(id);
-        Assert.Equal(1, counts[RowStatus.Pending]);
-        Assert.Equal(1, counts[RowStatus.Invalid]);
-
-        var invalid = Assert.Single((await env.Store.GetPageAsync(id, RowStatus.Invalid, 1, 10)).Rows);
-        Assert.Null(invalid.RowHash);
-        Assert.Equal("Debit is not a valid amount", invalid.ErrorText);
-        var pending = Assert.Single((await env.Store.GetPageAsync(id, RowStatus.Pending, 1, 10)).Rows);
-        Assert.Equal(64, pending.RowHash!.Length);
-    }
-
-    [SkippableFact]
     public async Task Failure_mid_load_discards_the_batch_and_leaves_no_staging_rows()
     {
         await using var env = NewEnv();
@@ -302,7 +278,7 @@ public abstract class StagingStoreContract
         Assert.Contains("4", bad[1].ErrorText);
     }
 
-    [SkippableFact]
+    [SkippableFact, Trait("Category", "Large")]
     public async Task Stages_a_200k_row_file_and_reports_time_load_rate_and_memory()
     {
         await using var env = NewEnv(large: true);

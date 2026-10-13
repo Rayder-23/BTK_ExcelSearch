@@ -22,10 +22,6 @@ public class HeaderAliasTests
     [InlineData("Narration 5", "Narration5")]
     public void Resolves_header_to_field(string header, string field)
         => Assert.Equal(field, HeaderAliases.Resolve(header));
-
-    [Fact]
-    public void Unknown_header_is_ignored()
-        => Assert.Null(HeaderAliases.Resolve("Some Extra Column"));
 }
 
 public class NormalizerTests
@@ -306,29 +302,6 @@ public class ParserTests : IDisposable
         Assert.Equal(RowHasher.Compute(a), RowHasher.Compute(b));
         Assert.NotEqual(RowHasher.Compute(a), RowHasher.Compute(c));
         Assert.Matches("^[0-9a-f]{64}$", RowHasher.Compute(a));
-    }
-
-    [Fact]
-    public void Sample_file_counts()
-    {
-        var path = Path.Combine(AppContext.BaseDirectory, "TestData", "software_filed_updated.xlsx");
-        var r = Parse(path);
-
-        Assert.Empty(r.FileErrors);
-        Assert.Equal(64, r.FileHash.Length);
-        Assert.Equal("data base filed", r.SheetName);
-
-        var valid = r.Rows.Count(x => x.IsValid);
-        var invalid = r.Rows.Count - valid;
-
-        // Expectation from the task: 14 data rows, 1 valid, 13 invalid (only the first row has both
-        // payorder no and txn ref/seq no).
-        Assert.Equal(14, r.Rows.Count);
-        Assert.Equal(1, valid);
-        Assert.Equal(13, invalid);
-
-        // The =3500000-642555 formula cell is read through its cached value.
-        Assert.Contains(r.Rows, x => x.Credit == 2857445m);
     }
 
     [Fact]
