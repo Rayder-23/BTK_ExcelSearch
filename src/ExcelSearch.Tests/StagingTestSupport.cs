@@ -5,23 +5,52 @@ using ExcelSearch.Data.Entities;
 using ExcelSearch.Data.Sqlite;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ExcelSearch.Tests;
 
 /// <summary>
-/// [Fact] for tests that use the development database. Skipped when EXCELSEARCH_SKIP_DB_TESTS=1.
+/// [Fact] for tests that use the development database. Skipped when EXCELSEARCH_SKIP_DB_TESTS=1 or EXCELSEARCH_TEST_CONNECTION is unset.
 /// These tests create and delete rows (only their own, keys prefixed TEST_).
 /// </summary>
 public sealed class DbFactAttribute : FactAttribute
 {
     public const string SkipVariable = "EXCELSEARCH_SKIP_DB_TESTS";
 
-    public DbFactAttribute()
+    public DbFactAttribute() => Skip = TestDatabase.SkipReason();
+}
+
+/// <summary>
+/// Where the SQL Server (Integration) tests run. The ONLY source is the environment variable EXCELSEARCH_TEST_CONNECTION: the app's
+/// configuration (appsettings.*.json, which will point at production) is never read. A database whose name contains "prod" is refused.
+/// </summary>
+public static class TestDatabase
+{
+    public const string ConnectionVariable = "EXCELSEARCH_TEST_CONNECTION";
+
+    /// <summary>Why the SQL Server tests should be skipped, or null when they can run.</summary>
+    public static string? SkipReason()
     {
-        if (Environment.GetEnvironmentVariable(SkipVariable) == "1")
-            Skip = $"{SkipVariable}=1: database tests skipped.";
+        if (Environment.GetEnvironmentVariable(DbFactAttribute.SkipVariable) == "1")
+            return $"{DbFactAttribute.SkipVariable}=1: database tests skipped.";
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ConnectionVariable)))
+            return $"{ConnectionVariable} is not set: SQL Server tests skipped.";
+        return null;
+    }
+
+    /// <summary>The test connection string. Throws (the test fails, loudly) if the database looks like production.</summary>
+    public static string ConnectionString()
+    {
+        var cs = Environment.GetEnvironmentVariable(ConnectionVariable);
+        if (string.IsNullOrWhiteSpace(cs))
+            throw new InvalidOperationException($"Set {ConnectionVariable} to the development database connection string, or set {DbFactAttribute.SkipVariable}=1.");
+
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(cs);
+        if (builder.InitialCatalog.Contains("prod", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Refusing to run: the database '{builder.InitialCatalog}' in {ConnectionVariable} looks like production. " +
+                "The tests insert and delete rows; point the variable at a development database.");
+        return cs;
     }
 }
 
@@ -30,8 +59,7 @@ public sealed class LargeDbFactAttribute : FactAttribute
 {
     public LargeDbFactAttribute()
     {
-        if (Environment.GetEnvironmentVariable(DbFactAttribute.SkipVariable) == "1")
-            Skip = $"{DbFactAttribute.SkipVariable}=1: database tests skipped.";
+        if (TestDatabase.SkipReason() is { } reason) Skip = reason;
         else if (Environment.GetEnvironmentVariable(LargeFactAttribute.Variable) != "1")
             Skip = $"Slow. Set {LargeFactAttribute.Variable}=1 to run.";
     }
@@ -156,7 +184,7 @@ public sealed class StagingEnv : IAsyncDisposable
         Store = services.GetRequiredService<IStagingStore>();
     }
 
-    /// <summary>The development SQL Server database, wired exactly like the app (AddExcelSearchDatabase).</summary>
+    /// <summary>The SQL Server database named by EXCELSEARCH_TEST_CONNECTION (never the app configuration), wired like the app.</summary>
     public static StagingEnv Create(StagingStoreOptions? options = null) =>
         Build(new DatabaseOptions { Provider = DatabaseProvider.SqlServer }, LoadConnectionString(), options, new SqlServerOps());
 
@@ -171,30 +199,7 @@ public sealed class StagingEnv : IAsyncDisposable
         return new StagingEnv(services.BuildServiceProvider(), ops);
     }
 
-    /// <summary>
-    /// Same configuration as the app: src/ExcelSearch/appsettings.json, then appsettings.Development.json
-    /// (gitignored), then environment variables (ConnectionStrings__DefaultConnection). Nothing is hard-coded.
-    /// </summary>
-    private static string LoadConnectionString()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ExcelSearch.sln"))) dir = dir.Parent;
-        if (dir is null) throw new InvalidOperationException("Could not find the repository root (ExcelSearch.sln).");
-
-        var appDir = Path.Combine(dir.FullName, "src", "ExcelSearch");
-        var config = new ConfigurationBuilder()
-            .AddJsonFile(Path.Combine(appDir, "appsettings.json"), optional: false)
-            .AddJsonFile(Path.Combine(appDir, "appsettings.Development.json"), optional: true)
-            .AddEnvironmentVariables()
-            .Build();
-
-        var cs = config.GetConnectionString("DefaultConnection");
-        if (string.IsNullOrWhiteSpace(cs))
-            throw new InvalidOperationException(
-                "No connection string. Create src/ExcelSearch/appsettings.Development.json (see the .example file) " +
-                "or set ConnectionStrings__DefaultConnection, or set EXCELSEARCH_SKIP_DB_TESTS=1 to skip database tests.");
-        return cs;
-    }
+    private static string LoadConnectionString() => TestDatabase.ConnectionString();
 
     public string Key(string suffix) => $"{Prefix}-{suffix}";
 

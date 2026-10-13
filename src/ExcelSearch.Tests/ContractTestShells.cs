@@ -5,7 +5,7 @@ namespace ExcelSearch.Tests;
 // The contract tests (StagingStoreContract, CommitContract, RefreshContract, ExportContract, ImportPreviewContract) are written once.
 // Each shell below runs one of them against one provider. A test appears twice in the results: ..._SqlServer and ..._Sqlite.
 //
-//   SQL Server  the development database, skipped when EXCELSEARCH_SKIP_DB_TESTS=1
+//   SQL Server  the database in EXCELSEARCH_TEST_CONNECTION; skipped when it is unset or EXCELSEARCH_SKIP_DB_TESTS=1
 //   SQLite      a fresh temp file per test class (SqliteDatabaseFixture), deleted afterwards; never skipped by that variable
 //
 // The 200,000-row tests (large: true) are skipped on both unless EXCELSEARCH_RUN_LARGE=1.
@@ -18,8 +18,7 @@ public static class ContractEnv
 
     public static StagingEnv SqlServer(bool large)
     {
-        Skip.If(Environment.GetEnvironmentVariable(DbFactAttribute.SkipVariable) == "1",
-            $"{DbFactAttribute.SkipVariable}=1: database tests skipped.");
+        Skip.If(TestDatabase.SkipReason() is not null, TestDatabase.SkipReason());
         SkipUnlessLarge(large);
         return StagingEnv.Create();
     }
