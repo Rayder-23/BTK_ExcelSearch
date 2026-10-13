@@ -27,6 +27,7 @@ Scripts/
 ├── publish.ps1          builds the framework-dependent win-x64 package into publish/ (gitignored)
 └── samples/             make_samples.py - generates the sample workbooks
 Samples/                 original bank-format examples; Samples/test/ holds the generated test workbooks and a manual checklist
+docs/quickstart.md       development setup for a fresh clone: requirements, how to check and install them, first run, tests
 docs/Deployment.md       publishing, production connection string, new database, first-run checklist, backup
 docs/Performance.md      performance report (import pipeline, search, export)
 db.md                    database schema documentation and change history
