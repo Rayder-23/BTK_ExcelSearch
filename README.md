@@ -24,8 +24,10 @@ src/
 Scripts/
 ├── db/                  T-SQL: 001-004 numbered scripts, init_db.sql (all of them in one), 005 (draft indexes, not applied); sqlite/ the SQLite schema
 ├── run/                 launcher scripts (run.ps1, run-dev.cmd, run-release.cmd)
+├── publish.ps1          builds the framework-dependent win-x64 package into publish/ (gitignored)
 └── samples/             make_samples.py - generates the sample workbooks
 Samples/                 original bank-format examples; Samples/test/ holds the generated test workbooks and a manual checklist
+docs/Deployment.md       publishing, production connection string, new database, first-run checklist, backup
 docs/Performance.md      performance report (import pipeline, search, export)
 db.md                    database schema documentation and change history
 AGENTS.md                guidance for coding agents (CLAUDE.md points to it)
@@ -44,7 +46,7 @@ The WPF project references Core and Data. Core and Data never reference the WPF 
 ## Prerequisites
 
 - Windows
-- .NET 8 SDK (or newer; the target stays .NET 8)
+- .NET 8 SDK (or newer; the target stays .NET 8) to build. To only RUN a published package, the .NET 8 Desktop Runtime (x64) or newer is enough (see [docs/Deployment.md](docs/Deployment.md))
 - SQL Server (set up against SQL Server Express 2022). The database must have `READ_COMMITTED_SNAPSHOT` on; `init_db.sql` does that. Not needed for the local SQLite option.
 - `dotnet-ef` only to re-scaffold the model: `dotnet tool install --global dotnet-ef`
 - Python with `openpyxl` only to regenerate the sample workbooks
@@ -57,17 +59,17 @@ The WPF project references Core and Data. Core and Data never reference the WPF 
    | File | In git? | Used when |
    |---|---|---|
    | `appsettings.json` | yes | Always loaded first (connection string left empty) |
-   | `appsettings.Development.json` | no (gitignored) | Debug builds |
-   | `appsettings.Production.json` | no (gitignored) | Release builds |
-   | `*.json.example` | yes | Templates to copy |
+   | `appsettings.Development.json` | no (gitignored) | Debug builds (Visual Studio, `dotnet run`); never copied into a Release build |
+   | `appsettings.Production.json` | no (gitignored, holds the password) | Release builds and the published package |
+   | `appsettings.Production.sample.json`, `*.json.example` | yes | Templates to copy |
 
-   Copy `appsettings.Development.json.example` to `appsettings.Development.json` (and the Production one likewise) and fill in your server, user and password. The key is `ConnectionStrings:DefaultConnection`. An optional top-level `CommitLockTimeoutSeconds` (default 120) sets how long a commit waits for another commit. Never commit the real files.
+   Copy `appsettings.Development.json.example` to `appsettings.Development.json` (and `appsettings.Production.sample.json` to `appsettings.Production.json`) and fill in your server, user and password. The key is `ConnectionStrings:DefaultConnection`. An optional top-level `CommitLockTimeoutSeconds` (default 120) sets how long a commit waits for another commit. Never commit the real files.
 3. **Build and run.**
    ```
    dotnet build ExcelSearch.sln
    dotnet run --project src/ExcelSearch
    ```
-   or use `Scripts\run\run-dev.cmd` / `run-release.cmd`. If the connection fails, the screen shows the error (a down server can take about 15 seconds to time out).
+   or use `Scripts\run\run-dev.cmd` / `run-release.cmd`. If the connection fails, a dialog names the settings file and key to fix (a down server can take about 15 seconds to time out); the window stays open so you can switch to Local DB. To deploy a package to other machines, see [docs/Deployment.md](docs/Deployment.md) (`Scripts\publish.ps1`).
 
 Debug builds run in the `Development` environment; any other build defaults to `Production`.
 
@@ -85,6 +87,10 @@ Or, to set it in configuration instead, add this to `appsettings.Development.jso
 
 Limits: one machine and one user, and **never put the file on a network share or a synced folder**. The type mapping (money as integer cents, dates as ISO text, case-insensitive keys) and every difference from SQL Server are in [db.md](db.md).
 
+## Publishing
+
+`Scripts\publish.ps1` makes a framework-dependent, non-single-file win-x64 package in `publish/` that uses `appsettings.Production.json`. To point it at the real server, change that file's one connection-string value and run the script. The file holds the `sa` password: keep it out of git and restrict who can read the deployment folder. The full procedure, the production database setup order and a first-run checklist are in [docs/Deployment.md](docs/Deployment.md).
+
 ## Trying it with sample data
 
 `Samples/test/` has generated workbooks for every case the Import screen handles (all new, invalid rows, duplicates and conflicts, repeats, missing header, large file for paging, ...) and `10_query_demo_3000_rows.xlsx` for the Query screen. `Samples/test/README.md` lists what each file does, the expected counts, and a manual checklist for both screens. Committing a sample writes real rows to the database you point the app at. Regenerate them with `python Scripts/samples/make_samples.py` (or `... 10` for just the query demo).
@@ -96,7 +102,7 @@ dotnet test src/ExcelSearch.Tests --filter "Category!=Integration&Category!=Larg
 dotnet test src/ExcelSearch.Tests --filter "Category=Integration&Category!=Large"    # Integration: needs the SQL Server dev database (about 14 s)
 ```
 
-Database tests run against the single development database from the same configuration as the app. The staging/commit/re-check/export tests are written once and also run against a temporary SQLite file (one fresh file per test class, deleted afterwards; those do not need SQL Server and are not skipped by the variable below). Every test uses unique `TEST_<guid>` keys, scopes its work to its own import batch, and deletes only the rows it created. `EXCELSEARCH_SKIP_DB_TESTS=1` skips them; the large tests (200,000-row import, 500,000-row Query run) also need `EXCELSEARCH_RUN_LARGE=1` and print their timings. Results are summarized in [docs/Performance.md](docs/Performance.md).
+The SQL Server (Integration) tests run against the database in the environment variable `EXCELSEARCH_TEST_CONNECTION` and nowhere else (they skip when it is unset, and refuse a database whose name contains "prod"; the app configuration is never read). The staging/commit/re-check/export tests are written once and also run against a temporary SQLite file (one fresh file per test class, deleted afterwards; those do not need SQL Server and are not skipped by the variable below). Every test uses unique `TEST_<guid>` keys, scopes its work to its own import batch, and deletes only the rows it created. `EXCELSEARCH_SKIP_DB_TESTS=1` skips them; the large tests (200,000-row import, 500,000-row Query run) also need `EXCELSEARCH_RUN_LARGE=1` and print their timings. Results are summarized in [docs/Performance.md](docs/Performance.md).
 
 ## Database model
 
@@ -126,6 +132,10 @@ dotnet ef dbcontext scaffold "<connection string>" Microsoft.EntityFrameworkCore
 
 - `AppDbContext` is registered through `AddDbContextFactory` (a desktop app has no request scope); each operation creates its own short-lived context.
 - Index ideas for larger data sets are in `Scripts/db/005_query_indexes.sql`. It is a draft: every statement is commented out and nothing in it has been applied.
+
+## License
+
+Proprietary, all rights reserved (see [LICENSE](LICENSE)). Third-party packages keep their own licences.
 
 ## Credits
 
