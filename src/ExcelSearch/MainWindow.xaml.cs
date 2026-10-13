@@ -16,8 +16,30 @@ namespace ExcelSearch
         public MainWindow(ShellViewModel shell)
         {
             InitializeComponent();
+            FitToScreen();
             _shell = shell;
             DataContext = shell;   // like passing the Model to a Razor view
+        }
+
+        /// <summary>
+        /// Opens the window at a sensible size and position: 85% of the usable screen area (the screen minus the taskbar), at most
+        /// 1400 x 900, never below the minimum size, and centred, so it is fully on screen on a laptop as well as a large monitor.
+        /// (A fixed height of 820 was taller than the usable height of small or scaled screens.) Maximizing still works as usual.
+        /// </summary>
+        private void FitToScreen()
+        {
+            var area = SystemParameters.WorkArea;   // device-independent units, taskbar excluded
+            var width = Math.Min(1400, Math.Max(MinWidth, area.Width * 0.85));
+            var height = Math.Min(900, Math.Max(MinHeight, area.Height * 0.85));
+            // On a screen smaller than the minimum size, fit the screen rather than run off it.
+            width = Math.Min(width, area.Width);
+            height = Math.Min(height, area.Height);
+
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Width = width;
+            Height = height;
+            Left = area.Left + (area.Width - width) / 2;
+            Top = area.Top + (area.Height - height) / 2;
         }
 
         // Closing cannot wait for a dialog that is awaited, so: cancel this attempt, ask, and close again if approved.
