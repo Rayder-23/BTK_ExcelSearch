@@ -9,7 +9,7 @@ A Windows desktop app (WPF) for importing bank-transaction Excel sheets into SQL
 **Status: working.** Two screens are built and tested:
 
 - **Import** - choose an `.xlsx`, see exactly what would happen (new rows, rows already in the database, conflicts, repeats inside the file, invalid rows), choose which conflicts overwrite the database, re-check against the database, export the invalid rows, then commit or discard. Files of 200,000+ rows are handled (streamed, staged in SQL Server, classified in SQL).
-- **Local DB option** - pick **Local DB** in the Database selector (bottom of the left rail) and the whole Import screen runs on a local SQLite file instead of SQL Server (single machine, single user). The Query screen is not available on Local DB yet. See "Local DB (SQLite)" below.
+- **Local DB option** - pick **Local DB** in the Database selector (bottom of the left rail) and the whole Import screen runs on a local SQLite file instead of SQL Server (single machine, single user). The Query screen works there too. See "Local DB (SQLite)" below.
 - **Query** - search the imported transactions: date range, customer name, CNIC, application / pay order / reference numbers (starts-with or exact), bank / project / dealer / branch / data-source lists, amount ranges and import batch. Server-side paging and sorting, totals for the whole result, row details with the import it came from, and export to Excel or CSV (selected columns or all 28 fields).
 
 ## Solution layout
@@ -81,7 +81,7 @@ Or, to set it in configuration instead, add this to `appsettings.Development.jso
 "Database": { "Provider": "Sqlite", "SqlitePath": "%LocalAppData%\\ExcelSearch\\excelsearch.db" }
 ```
 
-`SqlitePath` is optional (that value is the default). On first start the app creates the folder and the file and applies `Scripts/db/sqlite/001_create_schema.sql`; nothing needs to be installed. Import (stage, preview, conflicts, re-check, commit, discard, invalid-row export) works exactly as on SQL Server; the Query item is greyed out ("not yet available for Local DB"). SQL Server remains the default when `Database:Provider` is missing.
+`SqlitePath` is optional (that value is the default). On first start the app creates the folder and the file and applies `Scripts/db/sqlite/001_create_schema.sql`; nothing needs to be installed. Import (stage, preview, conflicts, re-check, commit, discard, invalid-row export) and the Query screen work exactly as on SQL Server (text search is case-insensitive for ASCII letters; see [db.md](db.md)). SQL Server remains the default when `Database:Provider` is missing.
 
 Limits: one machine and one user, and **never put the file on a network share or a synced folder**. The type mapping (money as integer cents, dates as ISO text, case-insensitive keys) and every difference from SQL Server are in [db.md](db.md).
 
@@ -92,7 +92,8 @@ Limits: one machine and one user, and **never put the file on a network share or
 ## Tests
 
 ```
-dotnet test src/ExcelSearch.Tests
+dotnet test src/ExcelSearch.Tests --filter "Category!=Integration&Category!=Large"   # Unit: no SQL Server needed (about 7 s)
+dotnet test src/ExcelSearch.Tests --filter "Category=Integration&Category!=Large"    # Integration: needs the SQL Server dev database (about 14 s)
 ```
 
 Database tests run against the single development database from the same configuration as the app. The staging/commit/re-check/export tests are written once and also run against a temporary SQLite file (one fresh file per test class, deleted afterwards; those do not need SQL Server and are not skipped by the variable below). Every test uses unique `TEST_<guid>` keys, scopes its work to its own import batch, and deletes only the rows it created. `EXCELSEARCH_SKIP_DB_TESTS=1` skips them; the large tests (200,000-row import, 500,000-row Query run) also need `EXCELSEARCH_RUN_LARGE=1` and print their timings. Results are summarized in [docs/Performance.md](docs/Performance.md).

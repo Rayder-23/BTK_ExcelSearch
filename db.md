@@ -1,5 +1,5 @@
 # ExcelSearch Database Schema
-Version: 1.32 | Last Updated: 2026-10-13
+Version: 1.33 | Last Updated: 2026-10-13
 Database: ExcelSearch
 Server: LOCAL
 
@@ -130,8 +130,9 @@ the file is empty; the schema version is `PRAGMA user_version`, and a file with 
 tables, same column names, same primary keys, same indexes, same `Status` check. The entities and `AppDbContext` are shared; the provider
 differences are in `Sqlite/SqliteModelConfiguration.cs` (value converters) and the stores.
 
-Scope: in this step SQLite runs the whole Import pipeline (stage, classify, preview, conflicts, overwrite choices, re-check, commit, discard,
-startup cleanup, invalid-row export). The Query screen is not available on SQLite yet (its nav entry is disabled).
+Scope: SQLite runs the whole Import pipeline (stage, classify, preview, conflicts, overwrite choices, re-check, commit, discard,
+startup cleanup, invalid-row export) and the Query screen (search, paging, sorting, totals, details, export). The search is one shared
+class (`TransactionQueryServiceBase`); `SqliteTransactionQueryService` overrides only text matching, text ordering, multi-select lists and timeout detection.
 
 ### Type mapping (SQL Server to SQLite)
 | SQL Server | SQLite column | Stored as | Notes |
@@ -160,7 +161,12 @@ startup cleanup, invalid-row export). The Query screen is not available on SQLit
 | Text length limits | enforced | not enforced | Yes: the parser already truncates. |
 | Timestamps | server clock | this PC's clock | Yes (single machine). |
 | `Id` of a transaction | sequential GUID | random v4 GUID | Yes: not used for ordering. |
-| Text search (`Contains`) | case-insensitive (collation) | EF's `Contains` is `instr()`, which is CASE-SENSITIVE; `LIKE` is case-insensitive for ASCII | **Query screen only (next step)**: use `EF.Functions.Like` on SQLite. |
+| Text search (customer name contains / starts with, reference numbers) | `StartsWith` / `Contains` / `=`, case-insensitive through the collation; `StartsWith` can use an index | `LIKE ... ESCAPE` a backslash, with `%`, `_` and the backslash in the typed text escaped (EF's `Contains` is `instr()`, which is CASE-SENSITIVE). Case-insensitive for ASCII letters only. `LIKE` uses an index only on the two NOCASE key columns, so name / reference searches scan (about 0.3 s per 500,000 rows) | Yes for ASCII. Non-ASCII letters match case-sensitively. |
+| Sorting a text column | database collation, case-insensitive | `ORDER BY col COLLATE NOCASE` (ASCII), so `alice` sorts next to `Alice` | Yes for ASCII. |
+| Multi-select lists (bank, project, dealer, branch, source) | `IN (...)`, case-insensitive | `col COLLATE NOCASE IN (...)` | Yes for ASCII. |
+| Dropdown values (distinct) | one value per case-insensitive spelling | `HBL` and `hbl` would be two entries (DISTINCT is case-sensitive), listed in NOCASE order | Only if the data mixes cases of the same bank. |
+| Money filters, sort, totals | decimal | SQL on the integer cents (`Debit >= 10000`, `ORDER BY Debit`, `SUM(Debit)`); EF converts to and from decimal | Yes. |
+| Query timeout | 60 s command timeout becomes `QueryTimeoutException` | SQLite has no statement time limit; only waiting for another connection's lock (`SQLITE_BUSY`) maps to it | Yes in practice (single user). |
 | Connection settings | none needed | per connection: `foreign_keys = ON`, `busy_timeout = 30000`, `synchronous = NORMAL` (an EF interceptor runs them on every open); database-wide: `journal_mode = WAL` (set once by the initializer) | n/a |
 
 ### Limitations of the local mode
@@ -183,3 +189,4 @@ startup cleanup, invalid-row export). The Query screen is not available on SQLit
 - 2026-10-12: `Scripts/db/005_query_indexes.sql` added as a DRAFT of index proposals with measurements (500,000-row run). Every statement is commented out; no index was created. Existing filter indexes were enough for the measured searches once the sort tie-break was changed in code (docs/Performance.md section 8). If an index is ever added, update 001, `init_db.sql`, the scaffolded model and this file together.
 - 2026-10-12: Test data: the 500,000-row and 200,000-row tests insert `TEST_<guid>` rows and delete them again (chunked, by prefix) in the same run; batch Ids are consumed, so `ImportBatches.Id` has gaps. Manual imports of the sample workbooks (keys like `PO-A-0001`, `PO-Q-0001`) are real rows and stay until deleted by hand.
 - 2026-10-13: Local SQLite provider added (Import pipeline only). New script `Scripts/db/sqlite/001_create_schema.sql` (`PRAGMA user_version = 1`), embedded in the app. NO change to the SQL Server schema, scripts or the scaffolded model. See "Local SQLite database" above for the type mapping and differences. `WITHOUT ROWID` was measured for `Transactions` and `ImportStaging` and not used (docs/Performance.md section 9).
+- 2026-10-13: Query screen enabled on the Local DB (SQLite). NO schema change and no new index: the 500,000-row run (docs/Performance.md section 10) had no search over about 1.1 s. The name filter gained a Contains / Starts-with mode (`TransactionFilter.CustomerNameMode`) on both databases; Starts-with can use `IX_Transactions_CustomerName` on SQL Server.

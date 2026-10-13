@@ -1,6 +1,6 @@
 ---
 title: ExcelSearch Performance Report
-version: 1.4
+version: 1.5
 last_updated: 2026-10-13
 status: current
 scope: Excel import pipeline (parse, stage, classify, commit) on SQL Server and on local SQLite, invalid-row export, reader latency, Query screen searches (SQL Server), re-check and conflict paging
@@ -262,6 +262,43 @@ and the sort is added work. Not applied, and no other speed-up was added (per th
   (both set to it); everything else waits 30 s.
 - A staging load holds the write lock for the whole file (one transaction). Another writer waits up to 30 s.
 
+## 10. Query screen on the local SQLite database (500,000 rows)
+
+The same `QueryLargeContract` test as section 8, run on a temporary SQLite file (`EXCELSEARCH_RUN_LARGE=1`, filter `QueryLargeTests_Sqlite`):
+500,000 `TEST_` rows seeded through stage + classify + commit, first page of 100 + count + totals, in seconds. The SQL Server column is copied
+from section 8 (version 1.2) and was NOT re-measured today; the two runs were made on different days on the same PC, so compare the size of the
+numbers, not the second decimal. No index was added on either database.
+
+| Search | Matching rows | SQLite: page | count | totals | all three in parallel | warm repeat | SQL Server: all three | warm repeat |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Date range (one month) | 7,750 | 0.05 | 0.01 | 0.07 | 0.02 | 0.02 | 0.07 | 0.07 |
+| Exact CNIC | 1 | 0.49 | 0.10 | 0.45 | 0.82 | 0.64 | 0.00 | 0.00 |
+| Application no starts with | 10,000 | 0.30 | 0.05 | 0.30 | 0.62 | 0.64 | 0.71 | 0.65 |
+| Customer name contains | 8,334 | 0.35 | 0.06 | 0.32 | 0.66 | 0.67 | 1.35 | 1.10 |
+| Bank + project | 1,667 | 0.34 | 0.31 | 0.34 | 1.07 | 1.01 | 0.51 | 0.59 |
+| Credit between | 20,010 | 0.29 | 0.26 | 0.29 | 0.83 | 0.86 | 0.26 | 0.26 |
+| Date range + bank + customer contains | 0 | 0.07 | 0.06 | 0.07 | 0.20 | 0.19 | 1.10 | 1.03 |
+| Unfiltered, ValueDate newest first (default) | 500,000 | 0.29 | 0.01 | 0.42 | 0.76 | 0.72 | 0.40 | 0.48 |
+| Unfiltered, CustomerName | 500,000 | 0.32 | 0.01 | 0.44 | 0.72 | 0.74 | 0.43 | 0.41 |
+| (extra) Unfiltered, Credit | 500,000 | 0.31 | 0.01 | 0.46 | 0.72 | 0.71 | 1.98 | 1.89 |
+| (extra) 500,000-row result | 500,000 | 0.40 | 0.07 | 0.51 | 1.04 | 0.97 | 3.11 | 3.18 |
+
+What the table says:
+- **Nothing on SQLite is over about 1.1 s**, so no SQLite index change is proposed (the rule was: propose, do not apply, anything over about 2 s).
+- Reference-number and name searches are scans on SQLite (about 0.3 s per 500,000 rows for the page and again for the totals): `LIKE` only uses an
+  index on a NOCASE column, and the filter columns are BINARY. If the table grows to several million rows, the thing to try first is a
+  `COLLATE NOCASE` index on `CustomerName` and `ApplicationNo` (for example `CREATE INDEX ... ON Transactions (CustomerName COLLATE NOCASE)`); it is
+  a proposal, not measured, and nothing was created.
+- Sorting a text column uses `COLLATE NOCASE` and still takes 0.32 s for the first page of 500,000 rows (SQLite keeps only the top 100 while scanning).
+- Money is sorted and summed as integers: the credit range, the Credit sort and the totals run in SQL with no rows loaded into memory
+  (the whole run grew the working set by at most 16 MB).
+- Dropdown values: 0.05-0.38 s per field. The cancel test finished before it could cancel (0.3 s), as expected for a synchronous engine.
+
+Other numbers from the same run (SQLite; SQL Server from section 8 in brackets): export of all 500,000 rows to CSV 12.9 s, +52 MB (12.5 s, +35 MB);
+to xlsx 21.6 s, +55 MB (22.8 s, +25 MB); re-check of a 200,000-row batch 1.5 s unchanged and 3.0 s with 20,000 rows changed (1.9 s, 1.9 s);
+conflict page 0.02-0.05 s (0.11-0.34 s). Seeding: commit of each 100,000-row batch took 9.6 s, 12.6 s, 13.3 s, 14.6 s, 16.1 s - it grows with the
+table because the 12 indexes get bigger.
+
 ## Version history
 
 | Version | Date | Change |
@@ -271,3 +308,4 @@ and the sort is added work. Not applied, and no other speed-up was added (per th
 | 1.2 | 2026-10-12 | Added section 8: Query screen search timings at 500,000 rows, the tie-break fix (2.36 s to 0.01 s), export memory, re-check and conflict paging at 200,000 rows. |
 | 1.3 | 2026-10-12 | Stage list extended (11-13: Query screen, tie-break fix, query export), "where the time goes" and reproduction steps now cover the Query tests, known-gaps list updated. Numbers unchanged from 1.2. |
 | 1.4 | 2026-10-13 | Added section 9: the local SQLite provider (200,000-row load, classify, commit, memory, reader latency), the `WITHOUT ROWID` measurement (not used) and the ordered-insert measurement (not applied). SQL Server figures not re-measured. |
+| 1.5 | 2026-10-13 | Added section 10: the Query screen on SQLite at 500,000 rows next to the SQL Server figures; no index proposed (nothing over about 1.1 s). |
