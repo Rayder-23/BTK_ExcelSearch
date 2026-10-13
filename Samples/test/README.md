@@ -1,7 +1,7 @@
 ---
 title: Sample workbooks for trying the import screen
-version: 1.1
-last_updated: 2026-10-12
+version: 1.2
+last_updated: 2026-10-13
 generator: Scripts/samples/make_samples.py
 ---
 
@@ -145,3 +145,22 @@ remove just that filter (it searches again); **Clear all** removes them all. Unt
 2. Search for `zzzz` in Customer name: "No transactions match these filters." in the grid; **Export** is disabled.
 3. Click **Clear**: all filters empty, the grid back to the prompt. The sort order and rows-per-page stay as you set them.
 4. A banner (for example after an export) has a ✕ and never goes away on its own.
+
+## Manual checklist: running on the local SQLite database
+
+Uses the same workbooks; the data goes into a SQLite file, never into SQL Server. Use a throw-away path first so you can delete it afterwards.
+
+1. **Switch the database.** At the bottom of the left rail, change the **Database** selector from *SQL Server* to *Local DB*, confirm the restart question, and let the app restart (it asks first if a file is staged). Expect: no SQL Server connection; the selector shows **Local DB**; **Query** is greyed out with a "SOON" mark and the tooltip "Not yet available for Local DB."; the file `%LocalAppData%\ExcelSearch\excelsearch.db` exists (with `-wal` and `-shm` next to it while the app runs). (To use a throw-away file instead, set `Database:SqlitePath` in `appsettings.Development.json` first.)
+2. **Happy path.** Choose `01_perfect_all_new.xlsx`: **New 40**; commit: "Committed batch ...: 40 new". Choose it again: **Already in database 40**, nothing to import.
+3. **Invalid rows + export.** `02_invalid_rows.xlsx`: **New 16, Invalid 15**; **Export invalid rows** writes an .xlsx with 15 rows, the original cell values, `Source Row` and `Errors`.
+4. **Conflicts.** Follow "The two-step run" above with `03_...`: the Conflicts tab lists what differs column by column; tick one row's Overwrite, use Overwrite all / Skip all, **Re-check against database**; commit and confirm the counts (updated vs skipped conflicts).
+5. **Repeats and paging.** `04_repeated_rows_in_file.xlsx` (New 20, Repeated in file 4, Invalid 2) and `06_large_for_paging.xlsx` (11 pages of New, 2 of Repeated, 3 of Invalid): Previous/Next and the page counters work.
+6. **Rejected files.** `05_...` and `07_...` show the same messages as on SQL Server and create no batch.
+7. **Discard.** Stage `10_query_demo_3000_rows.xlsx`, choose Discard and confirm: back to the start screen. Close the app with a staged, uncommitted file: you are asked whether to discard.
+8. **Case-insensitive keys.** Stage a copy of `01` in which one PayOrderNo is changed to lower case after `01` was committed: that row is NOT New (it is found as the same key).
+9. **Restart.** Close and start again: the data is still there (stage `01` again: Already in database 40), and a stale `Staged` batch from a crash is cleaned up at startup.
+10. **Big file (optional).** There is no 200,000-row sample; the automated run does it: `EXCELSEARCH_RUN_LARGE=1 dotnet test src/ExcelSearch.Tests --filter "FullyQualifiedName~_Sqlite"` stages, commits and re-stages 200,000 rows on a temp SQLite file and prints the timings.
+11. **Back to SQL Server.** Change the selector back to *SQL Server* and confirm: after the restart the Query screen is available again. (The choice is stored in `%LocalAppData%\ExcelSearch\user-settings.json`; delete that file to fall back to appsettings.)
+12. **Closing.** Close the window: it closes at once (under a second) with no error. With a staged file it asks first.
+
+Delete the Local DB file (and its `-wal`/`-shm`) when you are done if it was only a trial. Do not point `SqlitePath` at a network drive or a synced folder.

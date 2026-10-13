@@ -1,5 +1,5 @@
 # ExcelSearch Database Schema
-Version: 1.31 | Last Updated: 2026-10-12
+Version: 1.32 | Last Updated: 2026-10-13
 Database: ExcelSearch
 Server: LOCAL
 
@@ -122,6 +122,56 @@ Every parsed Excel row of a not-yet-committed batch (valid and invalid), so larg
 
 Indexes: `PK_ImportStaging` (clustered, ImportBatchId + ExcelRowNumber); `IX_ImportStaging_Key` (ImportBatchId, PayOrderNo, TxnRefSeqNo); `IX_ImportStaging_Status` (ImportBatchId, Status, ExcelRowNumber).
 
+## Local SQLite database (alternative provider)
+Everything above describes SQL Server. The app can also run on a local SQLite file; `Database:Provider` in appsettings chooses
+(`"SqlServer"`, the default, or `"Sqlite"`) and a restart switches it. The two databases are separate: nothing is copied between them.
+The SQLite schema is `Scripts/db/sqlite/001_create_schema.sql` (embedded in the app and applied at startup by `SqliteSchemaInitializer` when
+the file is empty; the schema version is `PRAGMA user_version`, and a file with a NEWER version than the app knows is refused). Same three
+tables, same column names, same primary keys, same indexes, same `Status` check. The entities and `AppDbContext` are shared; the provider
+differences are in `Sqlite/SqliteModelConfiguration.cs` (value converters) and the stores.
+
+Scope: in this step SQLite runs the whole Import pipeline (stage, classify, preview, conflicts, overwrite choices, re-check, commit, discard,
+startup cleanup, invalid-row export). The Query screen is not available on SQLite yet (its nav entry is disabled).
+
+### Type mapping (SQL Server to SQLite)
+| SQL Server | SQLite column | Stored as | Notes |
+|---|---|---|---|
+| nvarchar(n), varchar(n), char(n) | TEXT | text | Lengths are not enforced by SQLite; the parser truncates to the SQL Server lengths, so the data is the same. |
+| int, tinyint | INTEGER | integer | `Status` keeps its range with `CHECK (Status BETWEEN 0 AND 5)`. |
+| bit (`Overwrite`) | INTEGER | 0 / 1 | `CHECK (Overwrite IN (0, 1))`. |
+| date (`ValueDate`) | TEXT | `yyyy-MM-dd` | ISO, sorts and compares correctly as text. |
+| datetime2(0) (`ImportedAt`, `CommittedAt`, `CreatedAt`, `UpdatedAt`) | TEXT | `yyyy-MM-ddTHH:mm:ss.fffZ` (UTC) | Defaults use `strftime('%Y-%m-%dT%H:%M:%fZ','now')`. An EF converter reads them back as `DateTimeKind.Utc`. |
+| uniqueidentifier (`Transactions.Id`) | TEXT | upper-case GUID text | The default builds a random version-4 GUID in SQL. NOT sequential (SQLite has no `NEWSEQUENTIALID()`); `Id` is not the key. |
+| int IDENTITY (`ImportBatches.Id`) | INTEGER PRIMARY KEY AUTOINCREMENT | integer | AUTOINCREMENT so an id is never reused, like an identity. |
+| decimal(18,2): `Discount`, `DownPaymentAmount`, `Debit`, `Credit`, `RunningBalance` | INTEGER | **minor units (cents)**: 12.50 is stored as 1250 | EF would store a decimal as TEXT, and then range filters, ORDER BY and SUM() compare text. An EF value converter (SQLite only) and the staging loader convert with round-half-away-from-zero (0.005 becomes 0.01, -0.005 becomes -0.01). Values come back with scale 2. Anything written by hand in SQL must use cents (`Debit >= 10000` means 100.00). |
+| Default case-insensitive collation | `COLLATE NOCASE` on `PayOrderNo` and `TxnRefSeqNo` in `Transactions` and `ImportStaging` (so also in their indexes) | | `abc` and `ABC` are the same key and a duplicate, as on SQL Server. |
+
+### SQL Server versus SQLite: where behaviour differs
+| Topic | SQL Server | SQLite | Same result for the user? |
+|---|---|---|---|
+| Who writes | many users, row locks, RCSI for readers | ONE writer per file at a time (WAL mode: readers never wait for it) | Single user: yes. See limitations. |
+| Commit exclusivity | `sp_getapplock` + `UPDLOCK` on the batch row | `BEGIN IMMEDIATE` (the write lock) for the whole commit; a second writer waits | Yes: same guards, same failure reasons, same messages. A lock timeout is the same `LockTimeout` result (after `CommitLockTimeoutSeconds`). |
+| Discard vs commit | discard's conditional `UPDATE` waits for the commit's row lock | the same `UPDATE` waits for the commit's write lock | Yes (tested: discard always ends consistent). |
+| Staging load | `SqlBulkCopy`, 10,000-row batches | one transaction, one prepared `INSERT` per row | Yes. The load holds the write lock for the whole file. |
+| Classify / re-check / delete | chunks of 4,000 rows (below lock escalation) | one statement each (no escalation with one writer) | Yes. |
+| Key case-insensitivity | whole database collation (all columns, all languages) | `NOCASE` on the two key columns only, ASCII letters only | **No, for non-ASCII letters** (`É` and `é` are different keys on SQLite) and for non-key columns (an equality filter on a name or bank is case-sensitive). |
+| Trailing spaces | ignored by `=` | significant | Yes in practice: the parser trims every text value. |
+| Money | exact decimal(18,2) | exact integer cents; range about +-9.2e16 | Yes. |
+| Text length limits | enforced | not enforced | Yes: the parser already truncates. |
+| Timestamps | server clock | this PC's clock | Yes (single machine). |
+| `Id` of a transaction | sequential GUID | random v4 GUID | Yes: not used for ordering. |
+| Text search (`Contains`) | case-insensitive (collation) | EF's `Contains` is `instr()`, which is CASE-SENSITIVE; `LIKE` is case-insensitive for ASCII | **Query screen only (next step)**: use `EF.Functions.Like` on SQLite. |
+| Connection settings | none needed | per connection: `foreign_keys = ON`, `busy_timeout = 30000`, `synchronous = NORMAL` (an EF interceptor runs them on every open); database-wide: `journal_mode = WAL` (set once by the initializer) | n/a |
+
+### Limitations of the local mode
+- Single machine, single user. SQLite coordinates writers with file locks and a shared-memory file (`-shm`); that does not work over a network.
+  **Never place the SQLite file on a network share or a synced folder (OneDrive, Dropbox, ...)** - it can corrupt the database. The default
+  `%LocalAppData%\ExcelSearch\excelsearch.db` is on a local disk.
+- Two copies of the app on the same file work (writers queue), but an import that is staging holds the write lock until the whole file is
+  loaded; the other copy's commit/discard waits up to 30 s (`busy_timeout`) and then reports it could not get the lock.
+- The file has two companions while the app runs (`excelsearch.db-wal`, `excelsearch.db-shm`); back up the three together, or close the app first.
+- No tool in the app moves data between SQL Server and SQLite.
+
 ## Change History
 - 2026-10-08: Script `001_create_tables.sql` run against the local `ExcelSearch` database; created `dbo.ImportBatches` (10 columns) and `dbo.Transactions` (34 columns) with all keys and indexes above. Verified that the PK is (PayOrderNo, TxnRefSeqNo) and that a duplicate key insert fails with error 2627.
 - 2026-10-08: Ran `DBCC CHECKIDENT ('dbo.ImportBatches', RESEED, 0)` while the table was empty, so the first real batch gets Id 1. A rolled-back test insert during verification had consumed identity value 1. No data change.
@@ -132,3 +182,4 @@ Indexes: `PK_ImportStaging` (clustered, ImportBatchId + ExcelRowNumber); `IX_Imp
 - 2026-10-12: No schema change this day. The Query screen reads `Transactions` only. `Scripts/db/init_db.sql` added: 001-004 in one re-runnable script (creates the database if missing). Not run against the live database; its content equals what 001-004 already created.
 - 2026-10-12: `Scripts/db/005_query_indexes.sql` added as a DRAFT of index proposals with measurements (500,000-row run). Every statement is commented out; no index was created. Existing filter indexes were enough for the measured searches once the sort tie-break was changed in code (docs/Performance.md section 8). If an index is ever added, update 001, `init_db.sql`, the scaffolded model and this file together.
 - 2026-10-12: Test data: the 500,000-row and 200,000-row tests insert `TEST_<guid>` rows and delete them again (chunked, by prefix) in the same run; batch Ids are consumed, so `ImportBatches.Id` has gaps. Manual imports of the sample workbooks (keys like `PO-A-0001`, `PO-Q-0001`) are real rows and stay until deleted by hand.
+- 2026-10-13: Local SQLite provider added (Import pipeline only). New script `Scripts/db/sqlite/001_create_schema.sql` (`PRAGMA user_version = 1`), embedded in the app. NO change to the SQL Server schema, scripts or the scaffolded model. See "Local SQLite database" above for the type mapping and differences. `WITHOUT ROWID` was measured for `Transactions` and `ImportStaging` and not used (docs/Performance.md section 9).

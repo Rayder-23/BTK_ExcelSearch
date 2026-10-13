@@ -1,9 +1,9 @@
 ---
 title: ExcelSearch Performance Report
-version: 1.3
-last_updated: 2026-10-12
+version: 1.4
+last_updated: 2026-10-13
 status: current
-scope: Excel import pipeline (parse, stage, classify, commit), invalid-row export, reader latency, Query screen searches, re-check and conflict paging
+scope: Excel import pipeline (parse, stage, classify, commit) on SQL Server and on local SQLite, invalid-row export, reader latency, Query screen searches (SQL Server), re-check and conflict paging
 benchmark_file: synthetic workbook, 200,000 rows, TEST_ keys only
 environment: SQL Server Express (.\SQLEXPRESS), single development database, .NET 8, developer PC
 ---
@@ -49,6 +49,7 @@ The single change that mattered most was replacing the Entity Framework row-by-r
 | 11 | Query screen: parameterized LINQ search, server-side paging and sorting, separate count and totals queries | First page of 100 in 0.01-0.5 s on 500,000 rows for the everyday searches; count and totals take 0.01-1 s and fill in after the rows. See section 8. |
 | 12 | Sort tie-break follows the sort direction | Default search (newest first, unfiltered) page 2.36 s to 0.01 s, no new index. See section 8. |
 | 13 | Query export in 10,000-row keyset chunks (selected columns or all 28) | 500,000 rows: CSV 12.5 s (+35 MB), xlsx 22.8 s (+25 MB). Memory does not grow with rows. Writing fewer columns only makes the file smaller; it was not timed separately. See section 8. |
+| 14 | Local SQLite provider for the Import pipeline (prepared INSERT in one transaction, set-based SQL, `BEGIN IMMEDIATE` commit) | 200,000 rows: load 12.8 s (insert part about 1.5 s), classify 3.6 s, commit 13.7 s, working set +50 MB, readers unblocked. See section 9. |
 
 ## 3. What changed the numbers, and why
 
@@ -156,7 +157,7 @@ dotnet test src/ExcelSearch.Tests --logger "console;verbosity=detailed"
 ```
 
 The output reports parse, load, classify, commit and reader-latency timings, plus working-set growth, for the
-large tests in `StagingStoreTests.cs` and `CommitTests.cs`, the export timing and memory from `ExportDbTests.cs`, and
+large tests in `StagingStoreContract.cs` and `CommitContract.cs` (each runs on SQL Server and on SQLite; add `--filter "FullyQualifiedName~_Sqlite"` for SQLite only), the export timing and memory from `ExportContract.cs`, and
 the search, query-export, re-check and conflict-paging timings from `QueryLargeTests.cs` (it seeds 500,000 rows, takes about
 5 minutes, and also writes its report to `%TEMP%\ExcelSearch_query_large_report.txt`).
 The tests use unique `TEST_` keys and delete only their own rows afterwards.
@@ -209,6 +210,58 @@ all. Seconds, after the tie-break fix described below; "all three" runs page, co
   The "Re-check" gap listed in section 7 is therefore closed for this size.
 - Not timed: RegNo / ChequeInstNo / AccountNo filters (no index of their own), and the search with several concurrent users.
 
+## 9. Local SQLite provider (Import pipeline)
+
+The same 200,000-row synthetic workbook, the same contract tests, run against a temporary SQLite file (`EXCELSEARCH_RUN_LARGE=1`,
+filter `_Sqlite`). Same PC, Debug test build. The SQL Server column is copied from sections 1 and 3 of this report (versions 1.0-1.3);
+it was NOT re-measured on 2026-10-13 (the SQL Server service was stopped and could not be started from the session), so the comparison
+is across days, not side by side. SQLite version bundled with Microsoft.Data.Sqlite 8.0.31: **3.53.3**.
+
+| Step (200,000 rows) | SQLite | SQL Server (from this report) |
+|---|---|---|
+| Parse alone | 11.3 s | 7.8-14 s |
+| Load into staging (parse + insert) | 12.8-13.9 s (14,400-15,600 rows/s) | 12.7-21.3 s |
+| Of which the insert only | about 1.5 s | about 3.7 s |
+| Classify | 3.3-3.6 s | 5.8-9.3 s |
+| Same file again: load + classify | 9.6 s + 3.3 s, all 200,000 `ExactDuplicate` | not separately listed |
+| Commit (includes deleting the staging rows afterwards) | 13.7 s | 17-27 s |
+| `SELECT COUNT(*)` on `Transactions` while the commit runs | 0.001-0.039 s (WAL: readers read the last committed state) | 2-62 ms (RCSI) |
+| Working-set growth while staging and committing | +50 MB (83 to 133 MB) | +7 to +48 MB |
+| Export of 100,000 invalid rows | 8.5 s, +15 MB | 6.3 s, +13 MB |
+
+Reading the table: parsing the Excel file is the floor on both (the SQLite insert itself is fast, one transaction and one prepared `INSERT`).
+SQLite's classify and commit are not slower than SQL Server's at this size on one machine. This says nothing about concurrent users:
+SQLite has one writer, SQL Server many.
+
+### 9.1 `WITHOUT ROWID` was measured and not used
+
+Throw-away benchmark (not part of the repo): 200,000 rows with ~12 secondary indexes, Release build, rows generated in memory, the real
+store code, one run per layout (run-to-run noise 10-25%). `Transactions` has a wide row (about 30 columns) and a composite text key.
+
+| Layout | Load | Classify | Commit + staging delete | 2nd file: classify | 20,000 key lookups | File |
+|---|---|---|---|---|---|---|
+| ordinary rowid tables (kept) | 8.6 s | 3.7 s | 20.0 s | 6.3 s | 2.99 s | 221 MB |
+| `Transactions` WITHOUT ROWID | 6.7 s | 3.9 s | **46.0 s** | 7.4 s | 2.60 s | 263 MB |
+| `ImportStaging` WITHOUT ROWID | 6.7 s | 4.6 s | 20.0 s | 6.9 s | 2.36 s | 218 MB |
+| both WITHOUT ROWID | 6.7 s | 4.7 s | 45.6 s | 8.6 s | 2.57 s | 260 MB |
+
+For `Transactions` it more than doubles the commit time and grows the file (every secondary index entry then carries the long composite key,
+and rows are wide); the faster point lookups are not worth it. `ImportStaging` gains nothing (its key is two integers and its
+classify got slower). Both tables stay ordinary rowid tables. (The differences in "Load" between rows are noise or warm-up.)
+
+### 9.2 A faster commit insert was measured and NOT applied
+
+Sorting the `INSERT ... SELECT` by the key (`ORDER BY PayOrderNo, TxnRefSeqNo`) so rows reach the primary-key b-tree in order made it
+slower in the same benchmark (26.3 s against 16.1 s for the insert alone, rowid layout): the 11 secondary indexes are still filled in random order
+and the sort is added work. Not applied, and no other speed-up was added (per the "ask first" rule).
+
+### 9.3 Things to know when reading SQLite timings
+
+- Waiting for another connection's lock is SQLite's busy handler (`PRAGMA busy_timeout`) followed by Microsoft.Data.Sqlite retrying until the
+  command's `CommandTimeout`; measured: with only one of the two set, the wait is the longer one (about 30 s). A commit waits `CommitLockTimeoutSeconds`
+  (both set to it); everything else waits 30 s.
+- A staging load holds the write lock for the whole file (one transaction). Another writer waits up to 30 s.
+
 ## Version history
 
 | Version | Date | Change |
@@ -217,3 +270,4 @@ all. Seconds, after the tie-break fix described below; "all three" runs page, co
 | 1.1 | 2026-10-12 | Added the invalid-row export (MiniExcel replaced by a streaming writer: +213 MB to +13 MB), the error-cell scan cost, and the not-yet-timed re-check. |
 | 1.2 | 2026-10-12 | Added section 8: Query screen search timings at 500,000 rows, the tie-break fix (2.36 s to 0.01 s), export memory, re-check and conflict paging at 200,000 rows. |
 | 1.3 | 2026-10-12 | Stage list extended (11-13: Query screen, tie-break fix, query export), "where the time goes" and reproduction steps now cover the Query tests, known-gaps list updated. Numbers unchanged from 1.2. |
+| 1.4 | 2026-10-13 | Added section 9: the local SQLite provider (200,000-row load, classify, commit, memory, reader latency), the `WITHOUT ROWID` measurement (not used) and the ordered-insert measurement (not applied). SQL Server figures not re-measured. |
