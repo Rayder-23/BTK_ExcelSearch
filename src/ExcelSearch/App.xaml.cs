@@ -5,6 +5,7 @@ using ExcelSearch.Core.Query;
 using ExcelSearch.Core.Staging;
 using ExcelSearch.Data;
 using ExcelSearch.Data.Sqlite;
+using ExcelSearch.Data.SqlServer;
 using ExcelSearch.Services;
 using ExcelSearch.ViewModels;
 using CommunityToolkit.Mvvm.Messaging;
@@ -24,17 +25,40 @@ namespace ExcelSearch
 
         public App()
         {
+            // A settings file edited by hand can be malformed; say which file instead of dying with an unhandled exception.
+            try
+            {
+                _host = BuildHost();
+            }
+            catch (Exception ex)
+            {
+                var detail = ex.InnerException is null ? ex.Message : ex.Message + "\n" + ex.InnerException.Message;
+                MessageBox.Show("ExcelSearch could not read its settings.\n\n" + detail +
+                    "\n\nCheck the appsettings*.json files next to ExcelSearch.exe and " + UserSettings.FilePath + ".",
+                    "ExcelSearch - settings", MessageBoxButton.OK, MessageBoxImage.Error);
+                Environment.Exit(1);
+                throw;
+            }
+        }
+
+        private static IHost BuildHost()
+        {
             // CreateDefaultBuilder loads appsettings.json plus appsettings.{Environment}.json from the app's
             // base directory. The environment defaults to Production; Debug builds use Development.
             // The content root is where appsettings*.json are looked for. By default it is the current directory,
             // which `dotnet run --project src/ExcelSearch` leaves at the repo root (no settings there, so the
             // connection string came out empty). The settings files are copied next to the exe, so use that.
-            _host = Host.CreateDefaultBuilder()
+            return Host.CreateDefaultBuilder()
                 .UseContentRoot(AppContext.BaseDirectory)
                 // The database chosen in the app (left rail) is saved per user and overrides appsettings.
                 .ConfigureAppConfiguration(cfg => cfg.AddJsonFile(UserSettings.FilePath, optional: true, reloadOnChange: false))
+                // Debug builds (Visual Studio F5, dotnet run, Debug) use Development: appsettings.Development.json, the local database.
+                // Release builds, including the published package, ALWAYS use Production (appsettings.Production.json), even if a
+                // DOTNET_ENVIRONMENT variable is set on the machine.
 #if DEBUG
                 .UseEnvironment(Environments.Development)
+#else
+                .UseEnvironment(Environments.Production)
 #endif
                 .ConfigureServices((context, services) =>
                 {
@@ -101,10 +125,25 @@ namespace ExcelSearch
             // Housekeeping in the background: a failure here is logged and never blocks or crashes startup.
             var preview = _host.Services.GetRequiredService<ImportPreviewService>();
             var logger = _host.Services.GetRequiredService<ILogger<App>>();
+            var configuration = _host.Services.GetRequiredService<IConfiguration>();
             _ = Task.Run(async () =>
             {
                 try
                 {
+                    // SQL Server mode: if the connection string is missing or does not connect, tell the user which file and key to fix.
+                    // The window stays open so the Database selector can still switch to Local DB.
+                    if (!database.IsSqlite)
+                    {
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                        var problem = await SqlServerConnectionCheck.CheckAsync(configuration.GetConnectionString("DefaultConnection"), timeout.Token);
+                        if (problem is not null)
+                        {
+                            logger.LogError("SQL Server is not reachable: {Problem}", problem);
+                            await Dispatcher.InvokeAsync(() => ShowConnectionProblem(problem));
+                            return;
+                        }
+                    }
+
                     var cleanup = await preview.CleanupStaleBatchesAsync();
                     logger.LogInformation("Startup cleanup: {Stale} stale batch(es) discarded, {Left} leftover batch(es) cleaned.",
                         cleanup.StaleBatchesDiscarded, cleanup.LeftoverBatchesCleaned);
@@ -116,6 +155,18 @@ namespace ExcelSearch
             });
 
             base.OnStartup(e);
+        }
+
+        private void ShowConnectionProblem(string problem)
+        {
+            var file = System.IO.Path.Combine(AppContext.BaseDirectory,
+                $"appsettings.{_host.Services.GetRequiredService<IHostEnvironment>().EnvironmentName}.json");
+            MessageBox.Show(
+                "ExcelSearch could not connect to SQL Server.\n\n" + problem +
+                "\n\nTo fix it, edit the value of \"" + SqlServerConnectionCheck.ConfigKey + "\" (section ConnectionStrings, key DefaultConnection) in:\n" + file +
+                "\n(or set the ConnectionStrings__DefaultConnection environment variable), then start ExcelSearch again." +
+                "\n\nYou can also choose \"Local DB\" in the Database selector at the bottom left to work without SQL Server.",
+                "ExcelSearch - database connection", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         protected override async void OnExit(ExitEventArgs e)

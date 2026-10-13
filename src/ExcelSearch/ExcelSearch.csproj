@@ -5,9 +5,19 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- appsettings.json, appsettings.Development.json, appsettings.Production.json (the *.example templates are not copied) -->
+    <!-- appsettings.json and appsettings.Production.json are copied to the build AND publish output, plain text beside the exe.
+         appsettings.Development.json (local credentials) is copied for Debug only, never into a Release build or the published package.
+         The Production sample is a template for the repository and is never copied. -->
     <None Update="appsettings*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="appsettings.Development.json" Condition="'$(Configuration)' != 'Debug'">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </None>
+    <None Update="appsettings.Production.sample.json">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </None>
   </ItemGroup>
 
@@ -32,6 +42,21 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <!-- Run on a machine that has only a NEWER .NET Desktop Runtime than 8 (otherwise the app demands 8.x exactly). -->
+    <RollForward>LatestMajor</RollForward>
+    <!-- File properties of ExcelSearch.exe (Details tab). -->
+    <AssemblyName>ExcelSearch</AssemblyName>
+    <Product>ExcelSearch</Product>
+    <AssemblyTitle>ExcelSearch</AssemblyTitle>
+    <Company>Bahria Town Karachi</Company>
+    <Authors>Rayder-23</Authors>
+    <Description>Imports bank-transaction Excel sheets into SQL Server or a local database and searches them.</Description>
+    <Copyright>Copyright © 2026 Rayder-23</Copyright>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <InformationalVersion>1.0.0</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
