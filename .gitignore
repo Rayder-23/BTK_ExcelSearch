@@ -487,3 +487,6 @@ appsettings.Production.json
 
 # Claude Code local settings
 .claude/settings.local
+
+# Real bank data, never commit
+Samples/software filed (1).xlsx
