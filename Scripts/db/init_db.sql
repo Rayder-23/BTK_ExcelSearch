@@ -3,16 +3,24 @@
   init_db.sql   (SQL Server / T-SQL)
 
   Builds the whole ExcelSearch database schema in ONE run, from nothing to the
-  current state. It is the four active scripts joined in order:
+  current state. It is the active scripts joined in order:
 
     001_create_tables.sql   dbo.ImportBatches, dbo.Transactions (+ the filter indexes)
     002_create_staging.sql  ImportBatches.Status / CommittedAt, dbo.ImportStaging
     003_concurrency.sql     ImportBatches.ImportedBy, ImportStaging.ExistingRowHash,
                             IX_ImportBatches_Status_ImportedAt
     004_enable_rcsi.sql     READ_COMMITTED_SNAPSHOT ON (readers do not wait on a commit)
+    006_surrogate_key.sql   Transactions.Id is the primary key, PayOrderNo / TxnRefSeqNo are optional
+                            (filtered unique index for rows that have both), SlipNo / NarrationCnic columns
 
   NOT included: 005_query_indexes.sql (a draft; every statement in it is commented out
   and nothing in it has been applied to the live database).
+
+  How it gets to the final shape: sections 1-3 are the ORIGINAL scripts 001-003 (so a database
+  built by them and this file go through exactly the same steps), and section 5 (006) then
+  turns the business key into a surrogate key. A fresh database therefore passes through the
+  old key design for a moment inside this script; the END state is what counts, and section 7
+  checks it and stops with an error if anything is missing.
 
   Safe to re-run: every table, column and index is created only if it is missing, and
   RCSI is switched on only if it is off. Nothing is dropped, truncated or reseeded.
@@ -88,7 +96,7 @@ BEGIN
         PayOrderNo        NVARCHAR(50)     NOT NULL,
         TxnRefSeqNo       NVARCHAR(50)     NOT NULL,
         Id                UNIQUEIDENTIFIER NOT NULL
-                          CONSTRAINT DF_Transactions_Id DEFAULT NEWSEQUENTIALID(),  -- the app normally supplies its own
+                          CONSTRAINT DF_Transactions_Id DEFAULT NEWSEQUENTIALID(),  -- becomes the PRIMARY KEY in section 5 (006)
 
         -- Import tracking ----------------------------------------------------
         ImportBatchId     INT              NOT NULL,
@@ -129,7 +137,7 @@ BEGIN
         Narration4        NVARCHAR(500)    NULL,
         Narration5        NVARCHAR(500)    NULL,
 
-        -- Constraints --------------------------------------------------------
+        -- Constraints (the key design here is replaced by section 5 / 006) ---
         CONSTRAINT PK_Transactions PRIMARY KEY CLUSTERED (PayOrderNo, TxnRefSeqNo),
         CONSTRAINT UQ_Transactions_Id UNIQUE NONCLUSTERED (Id),
         CONSTRAINT FK_Transactions_ImportBatches
@@ -294,7 +302,103 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_read_c
 GO
 
 ------------------------------------------------------------------------------
--- 5. Verification (read-only): tables and column counts, indexes, RCSI
+-- 5. (006_surrogate_key.sql) Id becomes the primary key; PayOrderNo / TxnRefSeqNo optional;
+--    SlipNo / NarrationCnic columns; new indexes. See Docs/KeylessImport.md.
+------------------------------------------------------------------------------
+SET QUOTED_IDENTIFIER ON;   -- required for filtered indexes
+GO
+
+BEGIN TRANSACTION;
+
+------------------------------------------------------------------------------
+-- 1. Primary key moves from (PayOrderNo, TxnRefSeqNo) to Id; the key columns become NULLable
+--    (only while the old key columns are still NOT NULL, so a re-run skips this).
+------------------------------------------------------------------------------
+IF EXISTS (SELECT 1 FROM sys.columns
+           WHERE object_id = OBJECT_ID(N'dbo.Transactions') AND name = N'PayOrderNo' AND is_nullable = 0)
+BEGIN
+    -- The index on TxnRefSeqNo blocks the nullability change; it is recreated below.
+    IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Transactions_TxnRefSeqNo' AND object_id = OBJECT_ID(N'dbo.Transactions'))
+        DROP INDEX IX_Transactions_TxnRefSeqNo ON dbo.Transactions;
+
+    ALTER TABLE dbo.Transactions DROP CONSTRAINT PK_Transactions;
+    ALTER TABLE dbo.Transactions DROP CONSTRAINT UQ_Transactions_Id;
+
+    ALTER TABLE dbo.Transactions ALTER COLUMN PayOrderNo  NVARCHAR(50) NULL;
+    ALTER TABLE dbo.Transactions ALTER COLUMN TxnRefSeqNo NVARCHAR(50) NULL;
+
+    ALTER TABLE dbo.Transactions ADD CONSTRAINT PK_Transactions PRIMARY KEY CLUSTERED (Id);
+END;
+
+------------------------------------------------------------------------------
+-- 2. New derived columns
+------------------------------------------------------------------------------
+IF COL_LENGTH(N'dbo.Transactions', N'SlipNo') IS NULL
+    ALTER TABLE dbo.Transactions ADD SlipNo NVARCHAR(30) NULL;
+IF COL_LENGTH(N'dbo.Transactions', N'NarrationCnic') IS NULL
+    ALTER TABLE dbo.Transactions ADD NarrationCnic VARCHAR(20) NULL;
+IF COL_LENGTH(N'dbo.ImportStaging', N'SlipNo') IS NULL
+    ALTER TABLE dbo.ImportStaging ADD SlipNo NVARCHAR(30) NULL;
+IF COL_LENGTH(N'dbo.ImportStaging', N'NarrationCnic') IS NULL
+    ALTER TABLE dbo.ImportStaging ADD NarrationCnic VARCHAR(20) NULL;
+
+------------------------------------------------------------------------------
+-- 3. Indexes (EXEC so the batch compiles before the new columns exist)
+------------------------------------------------------------------------------
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_Transactions_Key' AND object_id = OBJECT_ID(N'dbo.Transactions'))
+    EXEC (N'CREATE UNIQUE NONCLUSTERED INDEX UX_Transactions_Key
+              ON dbo.Transactions (PayOrderNo, TxnRefSeqNo)
+              WHERE PayOrderNo IS NOT NULL AND TxnRefSeqNo IS NOT NULL');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Transactions_TxnRefSeqNo' AND object_id = OBJECT_ID(N'dbo.Transactions'))
+    EXEC (N'CREATE NONCLUSTERED INDEX IX_Transactions_TxnRefSeqNo ON dbo.Transactions (TxnRefSeqNo)');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Transactions_PayOrderNo' AND object_id = OBJECT_ID(N'dbo.Transactions'))
+    EXEC (N'CREATE NONCLUSTERED INDEX IX_Transactions_PayOrderNo ON dbo.Transactions (PayOrderNo)');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Transactions_RowHash' AND object_id = OBJECT_ID(N'dbo.Transactions'))
+    EXEC (N'CREATE NONCLUSTERED INDEX IX_Transactions_RowHash ON dbo.Transactions (RowHash)');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Transactions_SlipNo' AND object_id = OBJECT_ID(N'dbo.Transactions'))
+    EXEC (N'CREATE NONCLUSTERED INDEX IX_Transactions_SlipNo
+              ON dbo.Transactions (SlipNo) WHERE SlipNo IS NOT NULL');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Transactions_NarrationCnic' AND object_id = OBJECT_ID(N'dbo.Transactions'))
+    EXEC (N'CREATE NONCLUSTERED INDEX IX_Transactions_NarrationCnic
+              ON dbo.Transactions (NarrationCnic) WHERE NarrationCnic IS NOT NULL');
+
+COMMIT TRANSACTION;
+GO
+
+------------------------------------------------------------------------------
+-- 6. Final check: stop with an error if the database is not in the shape the app needs
+------------------------------------------------------------------------------
+DECLARE @problems NVARCHAR(MAX) = N'';
+IF NOT EXISTS (SELECT 1 FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+               JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+               WHERE i.object_id = OBJECT_ID(N'dbo.Transactions') AND i.is_primary_key = 1 AND c.name = N'Id')
+    SET @problems += N' Transactions primary key is not on Id.';
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Transactions') AND name IN (N'PayOrderNo', N'TxnRefSeqNo') AND is_nullable = 0)
+    SET @problems += N' PayOrderNo / TxnRefSeqNo are still NOT NULL.';
+IF COL_LENGTH(N'dbo.Transactions', N'SlipNo') IS NULL OR COL_LENGTH(N'dbo.Transactions', N'NarrationCnic') IS NULL
+   OR COL_LENGTH(N'dbo.ImportStaging', N'SlipNo') IS NULL OR COL_LENGTH(N'dbo.ImportStaging', N'NarrationCnic') IS NULL
+    SET @problems += N' SlipNo / NarrationCnic columns are missing.';
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_Transactions_Key' AND object_id = OBJECT_ID(N'dbo.Transactions') AND is_unique = 1 AND has_filter = 1)
+    SET @problems += N' UX_Transactions_Key (filtered unique) is missing.';
+IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_read_committed_snapshot_on = 1)
+    SET @problems += N' READ_COMMITTED_SNAPSHOT is off.';
+IF NOT (CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(128)) LIKE N'%[_]CI[_]%')
+    SET @problems += N' The database collation is not case-insensitive (name has no _CI_): keys that differ only by case would not collide.';
+IF @problems <> N''
+BEGIN
+    DECLARE @msg NVARCHAR(2000) = N'init_db.sql finished but the database is not ready:' + @problems;
+    THROW 51000, @msg, 1;
+END
+PRINT N'ExcelSearch database is ready.';
+GO
+
+------------------------------------------------------------------------------
+-- 7. Verification (read-only): tables and column counts, indexes, RCSI
 ------------------------------------------------------------------------------
 SELECT t.name AS TableName, COUNT(c.column_id) AS ColumnCount
 FROM sys.tables AS t
