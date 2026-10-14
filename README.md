@@ -8,9 +8,9 @@ A Windows desktop app (WPF) for importing bank-transaction Excel sheets into SQL
 
 **Status: working.** Two screens are built and tested:
 
-- **Import** - choose an `.xlsx`, see exactly what would happen (new rows, rows already in the database, conflicts, repeats inside the file, invalid rows), choose which conflicts overwrite the database, re-check against the database, export the invalid rows, then commit or discard. Files of 200,000+ rows are handled (streamed, staged in SQL Server, classified in SQL).
+- **Import** - choose an `.xlsx`, see exactly what would happen (new rows, rows already in the database, conflicts, repeats inside the file, possible duplicates, invalid rows), choose which conflicts overwrite the database, re-check against the database, export the invalid rows, then commit or discard. Files of 200,000+ rows are handled (streamed, staged in SQL Server, classified in SQL).
 - **Local DB option** - pick **Local DB** in the Database selector (bottom of the left rail) and the whole Import screen runs on a local SQLite file instead of SQL Server (single machine, single user). The Query screen works there too. See "Local DB (SQLite)" below.
-- **Query** - search the imported transactions: date range, customer name, CNIC, application / pay order / reference numbers (starts-with or exact), bank / project / dealer / branch / data-source lists, amount ranges and import batch. Server-side paging and sorting, totals for the whole result, row details with the import it came from, and export to Excel or CSV (selected columns or all 28 fields).
+- **Query** - search the imported transactions: date range, customer name, CNIC, application / pay order / reference / slip numbers (starts-with or exact; the CNIC filter also finds a CNIC written in the narrations), bank / project / dealer / branch / data-source lists, amount ranges and import batch. Server-side paging and sorting, totals for the whole result, row details with the import it came from, and export to Excel or CSV (selected columns or all 28 fields).
 
 ## Solution layout
 
@@ -30,6 +30,7 @@ Samples/                 original bank-format examples; Samples/test/ holds the 
 docs/quickstart.md       development setup for a fresh clone: requirements, how to check and install them, first run, tests
 docs/Deployment.md       publishing, production connection string, new database, first-run checklist, backup
 docs/Performance.md      performance report (import pipeline, search, export)
+Docs/KeylessImport.md    importing bank statements without pay order numbers: how it worked before, what changed and why, how to revert
 db.md                    database schema documentation and change history
 AGENTS.md                guidance for coding agents (CLAUDE.md points to it)
 ```
@@ -109,9 +110,9 @@ The SQL Server (Integration) tests run against the database in the environment v
 
 Three tables: `ImportBatches` (one row per imported file), `Transactions` (one row per Excel data row) and `ImportStaging` (rows of a file that has been loaded but not yet committed).
 
-- The primary key of `Transactions` is the business key **(PayOrderNo, TxnRefSeqNo)**, so a duplicate row is rejected by the database.
-- `Transactions.Id` is a separate unique GUID filled by a column default.
-- Each row stores a `RowHash` (SHA-256 of the business columns) so an import can tell an exact duplicate (same key, same hash) from a conflict (same key, different hash).
+- The primary key of `Transactions` is a surrogate `Id` (GUID). **PayOrderNo and TxnRefSeqNo are optional**: bank statements for cash deposits have neither. Rows that have **both** are still unique on that pair (a filtered unique index), and an import tells an exact duplicate (same key, same hash) from a conflict (same key, different hash). Rows without them can repeat; an import **flags** the ones that look like duplicates (already in the database, repeated in the file, or sharing a slip number, date, account and amount with a stored row) and imports them anyway unless **Skip flagged duplicates** is ticked.
+- `SlipNo` (from Narration 1) and `NarrationCnic` (a 13-digit CNIC in Narrations 2-5) are extracted at import for searching and for the duplicate hint. They are hints: the narrations are typed by hand.
+- Each row stores a `RowHash` (SHA-256 of the business columns) for those comparisons.
 - Identifiers such as CNIC and account numbers are stored as text so leading zeros survive; `Cnic` is digits only.
 - Commits are serialized with an application lock; discard and commit cannot race.
 

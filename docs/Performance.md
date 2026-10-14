@@ -299,6 +299,30 @@ to xlsx 21.6 s, +55 MB (22.8 s, +25 MB); re-check of a 200,000-row batch 1.5 s u
 conflict page 0.02-0.05 s (0.11-0.34 s). Seeding: commit of each 100,000-row batch took 9.6 s, 12.6 s, 13.3 s, 14.6 s, 16.1 s - it grows with the
 table because the 12 indexes get bigger.
 
+## 11. After the surrogate key (rows without a pay order no), 2026-10-14
+
+Schema change: `Transactions.Id` is the clustered key, four new indexes (`PayOrderNo`, `RowHash`, filtered `SlipNo`, filtered `NarrationCnic`) and a filtered unique
+index on the old key, so 14 plain indexes instead of 10 plus the unique one. Sort tie-break and export keyset are `Id`. Measured with the same Large tests, one
+provider at a time (the first run overlapped other heavy tests and its numbers are not used; it also hit two test-cleanup deadlocks, now retried).
+
+| | Before (sections 8, 10) | After |
+|---|---|---|
+| SQL Server: load / classify / commit of one 100,000-row batch | 5-12 s / 3-7 s / 13-20 s | 5-9 s / 5-7 s / 12-16 s |
+| SQL Server: unfiltered, newest first, page (default search) | 0.01 s | 0.02 s (the `Id` tie-break reads the `ValueDate` index backwards as before) |
+| SQL Server: unfiltered sorted by Credit, page | 1.75 s | 1.59 s |
+| SQL Server: 500,000-row result, count / totals | 2.4-2.7 s | 2.3 s / 2.9 s |
+| SQLite: commit of one 100,000-row batch | 9.6-16.1 s | **22.5-38.4 s** (more indexes to maintain; load and classify unchanged at 2-6 s) |
+| SQLite: slowest search | about 1.1 s | 1.9-2.1 s (exact CNIC, first call; it now checks `Cnic` and `NarrationCnic`) |
+| Working set growth while searching | 13-17 MB | 14-16 MB |
+
+Real statement file (50,921 rows, no keys): stage + classify 10.8 s then commit 4.2 s on SQL Server, 4.8 s + 3.0 s on SQLite (first run, cold); the same file staged
+again takes 6.8 s / 4.2 s and every row is Already in database. 200,000-row load/classify alone on SQL Server, no other test running: 31 s / 18 s; invalid-row
+export of 100,000 rows 11.3 s.
+
+What to take from it: the SQL Server figures did not move. The SQLite commit got about twice as slow because `Transactions` has four more indexes; it is still
+seconds for tens of thousands of rows (the real file commits in 3 s). If SQLite commit time matters, the first thing to try is dropping `IX_Transactions_RowHash`
+and relying on `SlipNo`, but nothing was changed.
+
 ## Version history
 
 | Version | Date | Change |
@@ -309,3 +333,4 @@ table because the 12 indexes get bigger.
 | 1.3 | 2026-10-12 | Stage list extended (11-13: Query screen, tie-break fix, query export), "where the time goes" and reproduction steps now cover the Query tests, known-gaps list updated. Numbers unchanged from 1.2. |
 | 1.4 | 2026-10-13 | Added section 9: the local SQLite provider (200,000-row load, classify, commit, memory, reader latency), the `WITHOUT ROWID` measurement (not used) and the ordered-insert measurement (not applied). SQL Server figures not re-measured. |
 | 1.5 | 2026-10-13 | Added section 10: the Query screen on SQLite at 500,000 rows next to the SQL Server figures; no index proposed (nothing over about 1.1 s). |
+| 1.6 | 2026-10-14 | Added section 11: the surrogate-key change (more indexes), SQL Server unchanged, SQLite commit about 2x slower, and the real key-less statement file end to end. |

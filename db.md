@@ -1,5 +1,5 @@
 # ExcelSearch Database Schema
-Version: 1.33 | Last Updated: 2026-10-13
+Version: 1.34 | Last Updated: 2026-10-14
 Database: ExcelSearch
 Server: LOCAL
 
@@ -10,7 +10,7 @@ Server: LOCAL
     4. Cross-reference api.txt/api.md (if it exists) wherever a table is directly exposed/managed via a REST endpoint
 ---
 
-Source of truth for the structure: `Scripts/db/001_create_tables.sql`, then `002`, `003` and `004` (each re-runnable). `Scripts/db/init_db.sql` joins 001-004 into one re-runnable script that also creates the database if it is missing; use it to build a fresh database. `005_query_indexes.sql` is a draft and is not part of the schema. EF Core entities in `src/ExcelSearch.Data` are scaffolded from this schema. Collation: `SQL_Latin1_General_CP1_CI_AS` (case-insensitive).
+Source of truth for the structure: `Scripts/db/001_create_tables.sql`, then `002`, `003`, `004` and `006` (each re-runnable; 006, added 2026-10-14, replaces the business key with a surrogate primary key, see the notes under Transactions and `Docs/KeylessImport.md`). `Scripts/db/init_db.sql` joins 001-004 and 006 into one re-runnable script that also creates the database if it is missing; use it to build a fresh database. `005_query_indexes.sql` is a draft and is not part of the schema. EF Core entities in `src/ExcelSearch.Data` are scaffolded from this schema. Collation: `SQL_Latin1_General_CP1_CI_AS` (case-insensitive).
 
 ## Relationships
 - `Transactions.ImportBatchId` → `ImportBatches.Id` (`FK_Transactions_ImportBatches`, no cascade)
@@ -29,8 +29,8 @@ One row per imported Excel file (audit trail and row counts).
 | FileHash | char(64) | NOT NULL | | SHA-256 hex of the file. Used for a "file already imported" WARNING only, not a hard block (index is non-unique). |
 | ImportedAt | datetime2(0) | NOT NULL | sysutcdatetime() | UTC. |
 | TotalRows | int | NOT NULL | 0 | Data rows found in the file. |
-| NewRows | int | NOT NULL | 0 | Rows inserted. |
-| SkippedRows | int | NOT NULL | 0 | Exact duplicates (same key, same RowHash). |
+| NewRows | int | NOT NULL | 0 | Rows inserted (since 2026-10-14 this includes flagged duplicates that were imported anyway). |
+| SkippedRows | int | NOT NULL | 0 | Valid rows left out: duplicates that were skipped (keyed ones always; key-less ones when the user chose to skip flagged duplicates) and conflicts that were not overwritten. |
 | UpdatedRows | int | NOT NULL | 0 | Conflicts (same key, different RowHash) the user chose to overwrite. |
 | RejectedRows | int | NOT NULL | 0 | Invalid rows that were not imported. |
 
@@ -48,8 +48,10 @@ Indexes: `PK_ImportBatches` (clustered, Id); `IX_ImportBatches_FileHash` (FileHa
 One row per Excel data row.
 
 - 2026-10-08: Created by `001_create_tables.sql`.
-- 2026-10-08: Primary key is the business key (PayOrderNo, TxnRefSeqNo), both required text. Chosen so a duplicate key is rejected by the database itself (error 2627), not only by import code.
-- 2026-10-08: `Id` (GUID) is a spare surrogate: unique, NOT the PK (filled by the column default, see the column table). If real data turns out to have gaps or non-unique key pairs, promote Id to PK and demote the pair to a normal index.
+- 2026-10-08: Primary key was the business key (PayOrderNo, TxnRefSeqNo), both required text. Chosen so a duplicate key is rejected by the database itself (error 2627), not only by import code.
+- 2026-10-08: `Id` (GUID) was a spare surrogate: unique, NOT the PK. The note here said that if real data turned out to have gaps or non-unique key pairs, Id should become the PK and the pair a normal index.
+- 2026-10-14: **That day came.** The real bank-statement file has no PayOrderNo on 99.99% of rows and no TxnRefSeqNo on all but one (most deposits are cash). `006_surrogate_key.sql` made `Id` the clustered PRIMARY KEY (`PK_Transactions`), made PayOrderNo and TxnRefSeqNo NULLable, and kept keyed rows unique with a FILTERED unique index `UX_Transactions_Key (PayOrderNo, TxnRefSeqNo) WHERE both are NOT NULL`. Rows without a full key are NOT restricted: identical rows are allowed and are flagged at import, not blocked. A row with only one of the two values counts as key-less. Rollback: `Scripts/db/rollback/006_rollback.sql`.
+- 2026-10-14: `SlipNo` and `NarrationCnic` added (see the column table): hints extracted at import from the narrations, because the narrations are all that identify a cash deposit. They are not part of `RowHash`, and not reliable (typed by bank staff).
 - 2026-10-08: Identifiers (account no, CNIC, refs…) are text because Excel mixes numbers and strings, values can exceed INT range, and leading zeros must survive. Amounts are decimal(18,2).
 - 2026-10-08: Because the collation is case-insensitive, keys differing only by case (`ab1` / `AB1`) count as the same key, and trailing spaces are ignored in comparisons.
 
@@ -57,12 +59,14 @@ Keys and tracking
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
-| PayOrderNo | nvarchar(50) | NOT NULL | | PK part 1. Excel: `payorder no`. |
-| TxnRefSeqNo | nvarchar(50) | NOT NULL | | PK part 2. Excel: `Txn Ref/ Seq No`. |
-| Id | uniqueidentifier | NOT NULL | newsequentialid() | Unique (`UQ_Transactions_Id`). Filled by the default: the commit insert leaves it out (2026-10-12: corrected; an earlier note said the app supplies it). |
+| Id | uniqueidentifier | NOT NULL | newsequentialid() | PRIMARY KEY, clustered (`PK_Transactions`) since 2026-10-14; before that a spare unique column (`UQ_Transactions_Id`, dropped). Filled by the default: the commit insert leaves it out. |
+| PayOrderNo | nvarchar(50) | NULL | | Optional since 2026-10-14. Excel: `payorder no`. With TxnRefSeqNo it is the business key of rows that have both (unique, see `UX_Transactions_Key`). |
+| TxnRefSeqNo | nvarchar(50) | NULL | | Optional since 2026-10-14. Excel: `Txn Ref/ Seq No`. |
+| SlipNo | nvarchar(30) | NULL | | Added 2026-10-14. The 8-digit slip number found in Narration 1 at import (digits only; about 77% of the rows of the real statement file have one). NOT unique: slips are reused. |
+| NarrationCnic | varchar(20) | NULL | | Added 2026-10-14. A 13-digit CNIC-like number found in Narrations 2-5 at import, digits only (dashes dropped). A hint, separate from `Cnic`; the Query CNIC filter matches either. |
 | ImportBatchId | int | NOT NULL | | FK → ImportBatches.Id. |
 | SourceRowNumber | int | NULL | | Excel row number in the source file. |
-| RowHash | char(64) | NOT NULL | | SHA-256 hex of the normalized business columns. Same key + same hash = exact duplicate (skip); same key + different hash = conflict (user decides). |
+| RowHash | char(64) | NOT NULL | | SHA-256 hex of the normalized business columns (not SlipNo / NarrationCnic). Rows with a full key: same key + same hash = exact duplicate (skip); same key + different hash = conflict (user decides). Key-less rows: same hash = "Already in database" (flagged, imported unless skipped). Indexed (`IX_Transactions_RowHash`). |
 | CreatedAt | datetime2(0) | NOT NULL | sysutcdatetime() | UTC. |
 | UpdatedAt | datetime2(0) | NULL | | Set when a conflict is overwritten. |
 
@@ -98,8 +102,9 @@ Business columns (Excel header → column)
 | Narration5 | nvarchar(500) | NULL | Narration 5 | |
 
 Indexes
-- `PK_Transactions` — clustered, (PayOrderNo, TxnRefSeqNo). Also covers lookups by PayOrderNo alone (leading column).
-- `UQ_Transactions_Id` — unique, (Id).
+- `PK_Transactions` — clustered, (Id). (Until 2026-10-14: clustered on (PayOrderNo, TxnRefSeqNo); `UQ_Transactions_Id` is gone.)
+- `UX_Transactions_Key` — unique, filtered `WHERE PayOrderNo IS NOT NULL AND TxnRefSeqNo IS NOT NULL`, (PayOrderNo, TxnRefSeqNo). Added 2026-10-14. Needs `SET QUOTED_IDENTIFIER ON` in the session that creates it (sqlcmd defaults to OFF; the scripts set it).
+- Added 2026-10-14: `IX_Transactions_PayOrderNo` (PayOrderNo; it used to be the PK's leading column), `IX_Transactions_RowHash` (RowHash), `IX_Transactions_SlipNo` (SlipNo, filtered `IS NOT NULL`), `IX_Transactions_NarrationCnic` (NarrationCnic, filtered `IS NOT NULL`).
 - Non-unique, for the filter screen: `IX_Transactions_TxnRefSeqNo` (TxnRefSeqNo), `IX_Transactions_ValueDate` (ValueDate), `IX_Transactions_Bank_Account` (BankName, AccountNo), `IX_Transactions_Project` (Project), `IX_Transactions_DealerName` (DealerName), `IX_Transactions_CustomerName` (CustomerName), `IX_Transactions_Cnic` (Cnic), `IX_Transactions_ApplicationNo` (ApplicationNo), `IX_Transactions_ChallanNo` (ChallanNo), `IX_Transactions_ImportBatchId` (ImportBatchId).
 
 ## Table: dbo.ImportStaging
@@ -113,11 +118,12 @@ Every parsed Excel row of a not-yet-committed batch (valid and invalid), so larg
 |---|---|---|---|---|
 | ImportBatchId | int | NOT NULL | | PK part 1. FK → ImportBatches.Id. |
 | ExcelRowNumber | int | NOT NULL | | PK part 2. 1-based row in the source sheet. |
-| Status | tinyint | NOT NULL | 0 | 0 Pending, 1 Invalid, 2 New, 3 ExactDuplicate, 4 FileDuplicate, 5 Conflict. |
+| Status | tinyint | NOT NULL | 0 | 0 Pending, 1 Invalid, 2 New, 3 ExactDuplicate, 4 FileDuplicate, 5 Conflict, 6 LikelyDuplicate (added 2026-10-14: a key-less row with the same slip number, value date, account and amounts as a Transactions row but other values differing; a hint only). Rows with a full key can only be 1-5 and keep their old rules. |
 | Overwrite | bit | NOT NULL | 0 | User's choice for Conflict rows. |
 | ErrorText | nvarchar(2000) | NULL | | Validation errors for the row, joined. |
 | RowHash | char(64) | NULL | | SHA-256 hex; NULL when the row failed validation while parsing. |
 | ExistingRowHash | char(64) | NULL | | For Conflict rows: RowHash of the matching `Transactions` row at classification time. Commit compares it with the current hash and aborts if the row changed since the preview. Added 2026-10-09. |
+| SlipNo, NarrationCnic | as in Transactions | NULL | | Added 2026-10-14 by `006_surrogate_key.sql`. |
 | PayOrderNo … Narration5 | as in Transactions | NULL | | Same names, types and sizes as the `Transactions` business columns (ValueDate is date). |
 
 Indexes: `PK_ImportStaging` (clustered, ImportBatchId + ExcelRowNumber); `IX_ImportStaging_Key` (ImportBatchId, PayOrderNo, TxnRefSeqNo); `IX_ImportStaging_Status` (ImportBatchId, Status, ExcelRowNumber).
@@ -125,8 +131,7 @@ Indexes: `PK_ImportStaging` (clustered, ImportBatchId + ExcelRowNumber); `IX_Imp
 ## Local SQLite database (alternative provider)
 Everything above describes SQL Server. The app can also run on a local SQLite file; `Database:Provider` in appsettings chooses
 (`"SqlServer"`, the default, or `"Sqlite"`) and a restart switches it. The two databases are separate: nothing is copied between them.
-The SQLite schema is `Scripts/db/sqlite/001_create_schema.sql` (embedded in the app and applied at startup by `SqliteSchemaInitializer` when
-the file is empty; the schema version is `PRAGMA user_version`, and a file with a NEWER version than the app knows is refused). Same three
+The SQLite schema is `Scripts/db/sqlite/001_create_schema.sql` plus `002_surrogate_key.sql` (version 2, 2026-10-14: the same change as SQL Server's 006; SQLite cannot alter a primary key, so it REBUILDS `Transactions` and `ImportStaging`, keeping every existing row; rollback: `Scripts/db/rollback/002_rollback_sqlite.sql`), embedded in the app and applied at startup by `SqliteSchemaInitializer` (a new file gets 001 then 002; an old file is upgraded; the schema version is `PRAGMA user_version`, and a file with a NEWER version than the app knows is refused). Same three
 tables, same column names, same primary keys, same indexes, same `Status` check. The entities and `AppDbContext` are shared; the provider
 differences are in `Sqlite/SqliteModelConfiguration.cs` (value converters) and the stores.
 
@@ -138,7 +143,7 @@ class (`TransactionQueryServiceBase`); `SqliteTransactionQueryService` overrides
 | SQL Server | SQLite column | Stored as | Notes |
 |---|---|---|---|
 | nvarchar(n), varchar(n), char(n) | TEXT | text | Lengths are not enforced by SQLite; the parser truncates to the SQL Server lengths, so the data is the same. |
-| int, tinyint | INTEGER | integer | `Status` keeps its range with `CHECK (Status BETWEEN 0 AND 5)`. |
+| int, tinyint | INTEGER | integer | `Status` keeps its range with `CHECK (Status BETWEEN 0 AND 6)` (0-5 in schema version 1). |
 | bit (`Overwrite`) | INTEGER | 0 / 1 | `CHECK (Overwrite IN (0, 1))`. |
 | date (`ValueDate`) | TEXT | `yyyy-MM-dd` | ISO, sorts and compares correctly as text. |
 | datetime2(0) (`ImportedAt`, `CommittedAt`, `CreatedAt`, `UpdatedAt`) | TEXT | `yyyy-MM-ddTHH:mm:ss.fffZ` (UTC) | Defaults use `strftime('%Y-%m-%dT%H:%M:%fZ','now')`. An EF converter reads them back as `DateTimeKind.Utc`. |
@@ -146,6 +151,7 @@ class (`TransactionQueryServiceBase`); `SqliteTransactionQueryService` overrides
 | int IDENTITY (`ImportBatches.Id`) | INTEGER PRIMARY KEY AUTOINCREMENT | integer | AUTOINCREMENT so an id is never reused, like an identity. |
 | decimal(18,2): `Discount`, `DownPaymentAmount`, `Debit`, `Credit`, `RunningBalance` | INTEGER | **minor units (cents)**: 12.50 is stored as 1250 | EF would store a decimal as TEXT, and then range filters, ORDER BY and SUM() compare text. An EF value converter (SQLite only) and the staging loader convert with round-half-away-from-zero (0.005 becomes 0.01, -0.005 becomes -0.01). Values come back with scale 2. Anything written by hand in SQL must use cents (`Debit >= 10000` means 100.00). |
 | Default case-insensitive collation | `COLLATE NOCASE` on `PayOrderNo` and `TxnRefSeqNo` in `Transactions` and `ImportStaging` (so also in their indexes) | | `abc` and `ABC` are the same key and a duplicate, as on SQL Server. |
+| Filtered unique index | `UX_Transactions_Key ... WHERE PayOrderNo IS NOT NULL AND TxnRefSeqNo IS NOT NULL` is a PARTIAL unique index | | Same meaning as on SQL Server. `SlipNo` / `NarrationCnic` are plain TEXT; `SlipNo` and `NarrationCnic` have partial indexes. |
 
 ### SQL Server versus SQLite: where behaviour differs
 | Topic | SQL Server | SQLite | Same result for the user? |
@@ -190,3 +196,4 @@ class (`TransactionQueryServiceBase`); `SqliteTransactionQueryService` overrides
 - 2026-10-12: Test data: the 500,000-row and 200,000-row tests insert `TEST_<guid>` rows and delete them again (chunked, by prefix) in the same run; batch Ids are consumed, so `ImportBatches.Id` has gaps. Manual imports of the sample workbooks (keys like `PO-A-0001`, `PO-Q-0001`) are real rows and stay until deleted by hand.
 - 2026-10-13: Local SQLite provider added (Import pipeline only). New script `Scripts/db/sqlite/001_create_schema.sql` (`PRAGMA user_version = 1`), embedded in the app. NO change to the SQL Server schema, scripts or the scaffolded model. See "Local SQLite database" above for the type mapping and differences. `WITHOUT ROWID` was measured for `Transactions` and `ImportStaging` and not used (docs/Performance.md section 9).
 - 2026-10-13: Query screen enabled on the Local DB (SQLite). NO schema change and no new index: the 500,000-row run (docs/Performance.md section 10) had no search over about 1.1 s. The name filter gained a Contains / Starts-with mode (`TransactionFilter.CustomerNameMode`) on both databases; Starts-with can use `IX_Transactions_CustomerName` on SQL Server.
+- 2026-10-14: **Surrogate primary key (key-less import).** Ran `Scripts/db/006_surrogate_key.sql` on the local `ExcelSearch` database (3,040 rows at the time; all kept their keys and values): `Transactions.Id` became the clustered PRIMARY KEY, `PayOrderNo` / `TxnRefSeqNo` became NULLable with a filtered unique index for rows that have both, `SlipNo` / `NarrationCnic` added to `Transactions` and `ImportStaging`, new indexes added (see Indexes). `ImportStaging.Status` gained code 6. Re-run on a copy and on a fresh database built from `init_db.sql` (which now includes 006) with the same result; `Scripts/db/rollback/006_rollback.sql` tested too. SQLite: new `002_surrogate_key.sql` (user_version 2), tested on a version-1 file with data. EF model re-scaffolded. Why and how: `Docs/KeylessImport.md`.

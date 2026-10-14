@@ -1,13 +1,13 @@
 ---
 title: Sample workbooks for trying the import screen
-version: 1.2
-last_updated: 2026-10-13
+version: 1.3
+last_updated: 2026-10-14
 generator: Scripts/samples/make_samples.py
 ---
 
 # Sample workbooks
 
-Files `01`-`10` in this folder (`Samples/test/`) are made by `python Scripts/samples/make_samples.py` (needs `pip install openpyxl`; output is
+Files `01`-`12` in this folder (`Samples/test/`) are made by `python Scripts/samples/make_samples.py` (needs `pip install openpyxl`; output is
 deterministic). The two `software filed ...` files in the parent `Samples/` folder are the original bank-format examples and are not generated.
 `SampleFilesTests` (parse-only, no database) checks the row counts below.
 
@@ -20,14 +20,16 @@ rows" in the app yet, so commit only what you are happy to leave there (or delet
 | File | Rows | Expected result on the preview | Tests |
 |---|---|---|---|
 | `01_perfect_all_new.xlsx` | 40 | **New 40**, nothing else | The happy path. Commit enabled: "Import 40 new rows". Mixes real dates and text dates (`07/04/2024`, `2024-04-14`, `21-Apr-2024`, `28-4-2024`), a CNIC with and without dashes, a credit row, the real bank headers with their misspellings. |
-| `02_invalid_rows.xlsx` | 31 (+1 blank row, skipped) | **New 16, Invalid 15** | Invalid tab with an Error column: missing PayOrderNo / Txn Ref / Value Date, impossible date, text date, wrong date format, non-numeric Debit and Credit, an Excel error value (`#DIV/0!`) in a cell, text over the column limit (customer, key, branch code), a row with three errors, and one key that appears twice with different values (both rows land in Invalid). Commit imports only the 16 new rows. |
+| `02_invalid_rows.xlsx` | 31 (+1 blank row, skipped) | **New 18, Invalid 13** | Invalid tab with an Error column: missing Value Date (twice), impossible date, text date, wrong date format, non-numeric Debit and Credit, an Excel error value (`#DIV/0!`) in a cell, text over the column limit (customer, key, branch code), and one key that appears twice with different values (both rows land in Invalid). A missing PayOrderNo or Txn Ref is NOT an error any more (since 2026-10-14): those two rows are New, key-less rows. Commit imports the 18 new rows. |
 | `03_reimport_of_01_duplicates_conflicts.xlsx` | 36 | See below: depends on whether `01` was committed | Already-in-database, Conflicts and Repeated-in-file. |
 | `04_repeated_rows_in_file.xlsx` | 26 | **New 20, Repeated in file 4, Invalid 2** | One row repeated 3 more times and another once (identical copies are skipped), and a key that appears twice with different values (both Invalid). |
-| `05_missing_required_header.xlsx` | 10 | **Rejected**: "Required header(s) not found ... payorder no" | The amber message on the idle screen; no batch is created. |
+| `05_missing_required_header.xlsx` | 10 | **Rejected**: "Required header(s) not found ... Value Date" | The amber message on the idle screen; no batch is created. |
 | `06_large_for_paging.xlsx` | 1,420 | **New 1,050 (11 pages), Repeated in file 120 (2 pages), Invalid 250 (3 pages)** | Paging: Previous/Next, "Page x of y", the loading overlay, scrolling. Commit and re-stage it to see Already in database 1,050 (11 pages). |
 | `07_not_really_excel.xlsx` | - | **Rejected**: not a readable workbook | A text file with an `.xlsx` name. |
 | `08_header_on_row_4_variant_headers.xlsx` | 10 | **New 10** | Three title lines above the header, and header spellings `PAYORDER NO`, `txn_ref_seq_no`, `value date`, `Dealer Name`, `Narration1`. First data row is Excel row 5. |
 | `10_query_demo_3000_rows.xlsx` | 3,000 | **New 3,000** | Data for the **Query screen**: two years of dates, 8 banks, 6 projects, 12 dealers, about 260 customers, plus rows made to be found (see the Query checklist). Keys `PO-Q-0001`..`PO-Q-3000` and `PO-Q-NEEDLE`. `python Scripts/samples/make_samples.py 10` regenerates just this file. |
+| `11_keyless_statement.xlsx` | 109 | **New 103, Repeated in file 6** (flagged, imported unless skipped); 0 invalid | A bank statement as in the real files: no pay order no / txn ref on 106 rows, narrations carrying a slip number (Narration 1, sometimes `R 12345678`), a name (Narration 3) and, on every third row, a 13-digit CNIC (Narration 4); 6 exact repeats; and 3 ordinary keyed rows (`PO-K-0001`..`0003`) so the file is mixed. Check: Query by Slip no and by CNIC. All values are invented. |
+| `12_keyless_reimport_of_11.xlsx` | 50 | After `11` is committed: **Already in database 30, Possible duplicates 10, New 10** | 30 rows identical to file 11 (flagged "Already in database"), 10 with the same slip, date, account and amount but a changed Narration 2 (flagged "Possible duplicates"), 10 new rows. Commit with the box unticked imports all 50 (a re-import doubles rows); tick **Skip flagged duplicates** and only the 10 new rows are imported. |
 | `../software filed (only columns).xlsx` | 0 | Zero rows | The headers-only edge case: Commit stays disabled. |
 
 ## The two-step run (Already in database + Conflicts)
@@ -152,7 +154,7 @@ Uses the same workbooks; the data goes into a SQLite file, never into SQL Server
 
 1. **Switch the database.** At the bottom of the left rail, change the **Database** selector from *SQL Server* to *Local DB*, confirm the restart question, and let the app restart (it asks first if a file is staged). Expect: no SQL Server connection; the selector shows **Local DB**; the file `%LocalAppData%\ExcelSearch\excelsearch.db` exists (with `-wal` and `-shm` next to it while the app runs). (To use a throw-away file instead, set `Database:SqlitePath` in `appsettings.Development.json` first.)
 2. **Happy path.** Choose `01_perfect_all_new.xlsx`: **New 40**; commit: "Committed batch ...: 40 new". Choose it again: **Already in database 40**, nothing to import.
-3. **Invalid rows + export.** `02_invalid_rows.xlsx`: **New 16, Invalid 15**; **Export invalid rows** writes an .xlsx with 15 rows, the original cell values, `Source Row` and `Errors`.
+3. **Invalid rows + export.** `02_invalid_rows.xlsx`: **New 18, Invalid 13**; **Export invalid rows** writes an .xlsx with 13 rows, the original cell values, `Source Row` and `Errors`.
 4. **Conflicts.** Follow "The two-step run" above with `03_...`: the Conflicts tab lists what differs column by column; tick one row's Overwrite, use Overwrite all / Skip all, **Re-check against database**; commit and confirm the counts (updated vs skipped conflicts).
 5. **Repeats and paging.** `04_repeated_rows_in_file.xlsx` (New 20, Repeated in file 4, Invalid 2) and `06_large_for_paging.xlsx` (11 pages of New, 2 of Repeated, 3 of Invalid): Previous/Next and the page counters work.
 6. **Rejected files.** `05_...` and `07_...` show the same messages as on SQL Server and create no batch.
