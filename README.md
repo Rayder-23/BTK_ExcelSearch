@@ -27,9 +27,9 @@ Scripts/
 ├── publish.ps1          builds the framework-dependent win-x64 package into publish/ (gitignored)
 └── samples/             make_samples.py - generates the sample workbooks
 Samples/                 original bank-format examples; Samples/test/ holds the generated test workbooks and a manual checklist
-docs/quickstart.md       development setup for a fresh clone: requirements, how to check and install them, first run, tests
-docs/Deployment.md       publishing, production connection string, new database, first-run checklist, backup
-docs/Performance.md      performance report (import pipeline, search, export)
+Docs/quickstart.md       development setup for a fresh clone: requirements, how to check and install them, first run, tests
+Docs/Deployment.md       publishing, production connection string, new database, first-run checklist, backup
+Docs/Performance.md      performance report (import pipeline, search, export)
 Docs/KeylessImport.md    importing bank statements without pay order numbers: how it worked before, what changed and why, how to revert
 db.md                    database schema documentation and change history
 AGENTS.md                guidance for coding agents (CLAUDE.md points to it)
@@ -48,7 +48,7 @@ The WPF project references Core and Data. Core and Data never reference the WPF 
 ## Prerequisites
 
 - Windows
-- .NET 8 SDK (or newer; the target stays .NET 8) to build. To only RUN a published package, the .NET 8 Desktop Runtime (x64) or newer is enough (see [docs/Deployment.md](docs/Deployment.md))
+- .NET 8 SDK (or newer; the target stays .NET 8) to build. To only RUN a published package, the .NET 8 Desktop Runtime (x64) or newer is enough (see [Docs/Deployment.md](Docs/Deployment.md))
 - SQL Server (set up against SQL Server Express 2022). The database must have `READ_COMMITTED_SNAPSHOT` on; `init_db.sql` does that. Not needed for the local SQLite option.
 - `dotnet-ef` only to re-scaffold the model: `dotnet tool install --global dotnet-ef`
 - Python with `openpyxl` only to regenerate the sample workbooks
@@ -71,7 +71,7 @@ The WPF project references Core and Data. Core and Data never reference the WPF 
    dotnet build ExcelSearch.sln
    dotnet run --project src/ExcelSearch
    ```
-   or use `Scripts\run\run-dev.cmd` / `run-release.cmd`. If the connection fails, a dialog names the settings file and key to fix (a down server can take about 15 seconds to time out); the window stays open so you can switch to Local DB. To deploy a package to other machines, see [docs/Deployment.md](docs/Deployment.md) (`Scripts\publish.ps1`).
+   or use `Scripts\run\run-dev.cmd` / `run-release.cmd`. If the connection fails, a dialog names the settings file and key to fix (a down server can take about 15 seconds to time out); the window stays open so you can switch to Local DB. To deploy a package to other machines, see [Docs/Deployment.md](Docs/Deployment.md) (`Scripts\publish.ps1`).
 
 Debug builds run in the `Development` environment; any other build defaults to `Production`.
 
@@ -91,7 +91,7 @@ Limits: one machine and one user, and **never put the file on a network share or
 
 ## Publishing
 
-`Scripts\publish.ps1` makes a framework-dependent, non-single-file win-x64 package in `publish/` that uses `appsettings.Production.json`. To point it at the real server, change that file's one connection-string value and run the script. The file holds the `sa` password: keep it out of git and restrict who can read the deployment folder. The full procedure, the production database setup order and a first-run checklist are in [docs/Deployment.md](docs/Deployment.md).
+`Scripts\publish.ps1` makes a framework-dependent, non-single-file win-x64 package in `publish/` that uses `appsettings.Production.json`. To point it at the real server, change that file's one connection-string value and run the script. The file holds the `sa` password: keep it out of git and restrict who can read the deployment folder. The full procedure, the production database setup order and a first-run checklist are in [Docs/Deployment.md](Docs/Deployment.md).
 
 ## Trying it with sample data
 
@@ -104,7 +104,7 @@ dotnet test src/ExcelSearch.Tests --filter "Category!=Integration&Category!=Larg
 dotnet test src/ExcelSearch.Tests --filter "Category=Integration&Category!=Large"    # Integration: needs the SQL Server dev database (about 14 s)
 ```
 
-The SQL Server (Integration) tests run against the database in the environment variable `EXCELSEARCH_TEST_CONNECTION` and nowhere else (they skip when it is unset, and refuse a database whose name contains "prod"; the app configuration is never read). The staging/commit/re-check/export tests are written once and also run against a temporary SQLite file (one fresh file per test class, deleted afterwards; those do not need SQL Server and are not skipped by the variable below). Every test uses unique `TEST_<guid>` keys, scopes its work to its own import batch, and deletes only the rows it created. `EXCELSEARCH_SKIP_DB_TESTS=1` skips them; the large tests (200,000-row import, 500,000-row Query run) also need `EXCELSEARCH_RUN_LARGE=1` and print their timings. Results are summarized in [docs/Performance.md](docs/Performance.md).
+The SQL Server (Integration) tests run against the database in the environment variable `EXCELSEARCH_TEST_CONNECTION` and nowhere else (they skip when it is unset, and refuse a database whose name contains "prod"; the app configuration is never read). The staging/commit/re-check/export tests are written once and also run against a temporary SQLite file (one fresh file per test class, deleted afterwards; those do not need SQL Server and are not skipped by the variable below). Every test uses unique `TEST_<guid>` keys, scopes its work to its own import batch, and deletes only the rows it created. `EXCELSEARCH_SKIP_DB_TESTS=1` skips them; the large tests (200,000-row import, 500,000-row Query run) also need `EXCELSEARCH_RUN_LARGE=1` and print their timings. Results are summarized in [Docs/Performance.md](Docs/Performance.md).
 
 ## Database model
 

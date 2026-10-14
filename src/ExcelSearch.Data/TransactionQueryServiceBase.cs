@@ -335,7 +335,7 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
         // Tie-breaker: Id, the primary key (rows have no other unique value: PayOrderNo / TxnRefSeqNo are optional).
         // It follows the main direction on purpose: an index on (ValueDate) also holds the clustered key (Id), so it can be read
         // backwards for "newest first" only if the tie-break runs backwards too. (Measured with the old key: 2.4 s with an
-        // ascending tie-break on 500,000 rows because everything had to be sorted; see docs/Performance.md.)
+        // ascending tie-break on 500,000 rows because everything had to be sorted; see Docs/Performance.md.)
         return d ? o.ThenByDescending(t => t.Id) : o.ThenBy(t => t.Id);
     }
 

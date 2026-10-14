@@ -65,7 +65,7 @@
            Other text columns keep SQLite's default BINARY collation for now.
 
   Table layout: ordinary rowid tables. WITHOUT ROWID was measured for Transactions and
-  ImportStaging and not kept; the numbers are in docs/Performance.md.
+  ImportStaging and not kept; the numbers are in Docs/Performance.md.
 ================================================================================
 */
 

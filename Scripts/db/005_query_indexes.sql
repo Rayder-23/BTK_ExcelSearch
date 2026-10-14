@@ -5,7 +5,7 @@
   decide which (if any) you want, then un-comment those statements and run them yourself.
 
   Measured on 2026-10-12 with 501,090 rows in dbo.Transactions (500,000 of them synthetic TEST_ rows), the Query screen's
-  searches, first page of 100 + COUNT + SUMs (see docs/Performance.md section 8 and src/ExcelSearch.Tests/QueryLargeTests.cs):
+  searches, first page of 100 + COUNT + SUMs (see Docs/Performance.md section 8 and src/ExcelSearch.Tests/QueryLargeTests.cs):
 
     Search                                          page     count    totals   verdict
     ----------------------------------------------  -------  -------  -------  --------------------------------------------

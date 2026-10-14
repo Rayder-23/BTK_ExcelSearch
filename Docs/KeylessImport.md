@@ -197,10 +197,10 @@ Rewrite, not add, where a test encodes the old rule:
 - `SampleFilesTests` / `make_samples.py`: add a synthetic `11_keyless_statement.xlsx` with slip numbers, repeats and a few keyed rows, plus its README checklist entry.
 
 ### 8. Docs
-`db.md` (new version, dated change entry, key and Status 6 text), `AGENTS.md` (database design rules, status table, Commands note), `README.md`, `Samples/test/README.md`, `docs/Deployment.md` (run 006 on an existing server database), `docs/Performance.md` (re-measure the 500k Query and the 200k import).
+`db.md` (new version, dated change entry, key and Status 6 text), `AGENTS.md` (database design rules, status table, Commands note), `README.md`, `Samples/test/README.md`, `Docs/Deployment.md` (run 006 on an existing server database), `Docs/Performance.md` (re-measure the 500k Query and the 200k import).
 
 ### 9. New change document: `Docs/KeylessImport.md`
-(The folder on disk is `Docs/`. Git's index still records the three existing files as `docs/...`, left over from an earlier commit, which only matters on a case-sensitive checkout. I will not rename anything unless you ask; the new file goes in `Docs/`.)
+(The folder on disk is `Docs/`. At the time of writing git still recorded the existing files as `docs/...`; that was fixed afterwards by renaming the folder in git to `Docs/`.)
 A record of this one feature, written FIRST (before any code) and finished at the end:
 - **Baseline for reverting:** commit `7f8379d7a7fe4b6c4b398ed600689f70012657d6` ("Docs: Add development quickstart for fresh clones", origin/main, clean tree). At the end I add the hashes of the commits that make up the change, so `git revert <first>^..<last>` or `git checkout 7f8379d -- .` is spelled out.
 - **How the app worked before:** the business key as primary key; required PayOrderNo / TxnRefSeqNo; the five statuses and what each meant; Conflict / Overwrite; the 2627 backstop; the (PayOrderNo, TxnRefSeqNo) sort tie-break and export keyset; the Query filters; 28 export fields; SQLite schema version 1 and the SQL Server scripts 001-004.
@@ -231,7 +231,7 @@ A record of this one feature, written FIRST (before any code) and finished at th
   - It reports the flagged duplicate counts.
 - Re-import the same file: all key-less rows are flagged ExactDuplicate (about 50.9k). Skip flagged duplicates imports 0. The second commit without the flag doubles the rows, as requested.
 - Query: filter by slip no and by CNIC (Cnic or narration), sort and page with null keys, export a result, open Details for a key-less row.
-- Time the 50.9k import, the 500k Query and a 200k import against `docs/Performance.md`.
+- Time the 50.9k import, the 500k Query and a 200k import against `Docs/Performance.md`.
 - A manual UIA pass on the Import and Query screens.
 
 ## Risks to know

@@ -12,7 +12,7 @@ Nobody has to open or see the folder full of DLLs.
 
 - Today the app sits inside `publish/` among all its code files and the `.exe` is easy to miss. The goal is that normal users never see that folder.
 - .NET offers no setting that tucks the DLLs of a framework-dependent app into subfolders and leaves only the `.exe` visible. Workarounds (a launcher exe, editing probing paths) are fragile or add another project to maintain. An installer solves the visibility problem and adds shortcuts, uninstall and upgrades on top.
-- The existing decisions stay as they are: framework-dependent publish, not single-file, no trimming, ReadyToRun **not** enabled (see `docs/Deployment.md`).
+- The existing decisions stay as they are: framework-dependent publish, not single-file, no trimming, ReadyToRun **not** enabled (see `Docs/Deployment.md`).
 
 Options that were considered: a subfolder plus a small launcher exe; a subfolder plus a `.cmd` launcher; a plain zip with a README. The installer was chosen as the best fit for non-technical users.
 
