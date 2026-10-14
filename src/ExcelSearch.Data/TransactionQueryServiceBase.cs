@@ -329,6 +329,16 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
             TransactionColumn.DownPaymentAmount => By(q, t => t.DownPaymentAmount, d),
             TransactionColumn.RunningBalance => By(q, t => t.RunningBalance, d),
             TransactionColumn.SlipNo => ByText(q, t => t.SlipNo, d),
+            TransactionColumn.Discount => By(q, t => t.Discount, d),
+            TransactionColumn.BranchCode => ByText(q, t => t.BranchCode, d),
+            TransactionColumn.PlotNo => ByText(q, t => t.PlotNo, d),
+            TransactionColumn.StreetNo => ByText(q, t => t.StreetNo, d),
+            TransactionColumn.Narration1 => ByText(q, t => t.Narration1, d),
+            TransactionColumn.Narration2 => ByText(q, t => t.Narration2, d),
+            TransactionColumn.Narration3 => ByText(q, t => t.Narration3, d),
+            TransactionColumn.Narration4 => ByText(q, t => t.Narration4, d),
+            TransactionColumn.Narration5 => ByText(q, t => t.Narration5, d),
+            TransactionColumn.NarrationCnic => ByText(q, t => t.NarrationCnic, d),
             _ => throw new ArgumentOutOfRangeException(nameof(sort), sort.Column, "Not a sortable column."),
         };
 

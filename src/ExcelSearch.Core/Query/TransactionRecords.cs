@@ -5,7 +5,7 @@ public enum TransactionColumn
 {
     ValueDate, PayOrderNo, TxnRefSeqNo, CustomerName, Cnic, ApplicationNo, RegNo, ChallanNo, ChequeInstNo,
     BankName, AccountNo, Project, DealerName, BranchName, DataSource, Debit, Credit, DownPaymentAmount, RunningBalance,
-    SlipNo,
+    SlipNo, Discount, BranchCode, PlotNo, StreetNo, Narration1, Narration2, Narration3, Narration4, Narration5, NarrationCnic,
 }
 
 /// <summary>

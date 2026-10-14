@@ -262,7 +262,7 @@ public abstract class QueryServiceContract
             Assert.Equal(5, result.PageCount);
             Assert.Equal(page, result.PageNumber);
             sizes.Add(result.Rows.Count);
-            seen.AddRange(result.Rows.Select(r => r.PayOrderNo));
+            seen.AddRange(result.Rows.Select(r => r.PayOrderNo!));
         }
         Assert.Equal(new[] { 7, 7, 7, 7, 2 }, sizes);
         Assert.Equal(30, seen.Distinct().Count());                          // no row twice, none skipped
@@ -292,8 +292,8 @@ public abstract class QueryServiceContract
         var keys = new Dictionary<TransactionColumn, Func<Transaction, IComparable?>>
         {
             [TransactionColumn.ValueDate] = t => t.ValueDate,
-            [TransactionColumn.PayOrderNo] = t => t.PayOrderNo.ToUpperInvariant(),
-            [TransactionColumn.TxnRefSeqNo] = t => t.TxnRefSeqNo.ToUpperInvariant(),
+            [TransactionColumn.PayOrderNo] = t => t.PayOrderNo!.ToUpperInvariant(),
+            [TransactionColumn.TxnRefSeqNo] = t => t.TxnRefSeqNo!.ToUpperInvariant(),
             [TransactionColumn.CustomerName] = t => t.CustomerName?.ToUpperInvariant(),
             [TransactionColumn.Cnic] = t => t.Cnic,
             [TransactionColumn.ApplicationNo] = t => t.ApplicationNo,
@@ -310,9 +310,12 @@ public abstract class QueryServiceContract
             [TransactionColumn.Credit] = t => t.Credit,
             [TransactionColumn.DownPaymentAmount] = t => t.DownPaymentAmount,
             [TransactionColumn.RunningBalance] = t => t.RunningBalance,
+            [TransactionColumn.Discount] = t => t.Discount,
+            [TransactionColumn.Narration1] = t => t.Narration1?.ToUpperInvariant(),
         };
         var covered = new[] { TransactionColumn.ValueDate, TransactionColumn.CustomerName, TransactionColumn.BankName,
-                              TransactionColumn.Debit, TransactionColumn.Credit, TransactionColumn.RunningBalance };
+                              TransactionColumn.Debit, TransactionColumn.Credit, TransactionColumn.RunningBalance,
+                              TransactionColumn.Discount, TransactionColumn.Narration1 };
 
         var byId = seed.Rows.ToDictionary(r => r.Id);
 

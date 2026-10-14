@@ -180,18 +180,19 @@ public sealed partial class QueryViewModel : ObservableObject
         new("Cheque / inst no", nameof(TransactionRecord.ChequeInstNo), TransactionColumn.ChequeInstNo, ColumnKind.Mono, null, 130, false),
         new("Data source", nameof(TransactionRecord.DataSource), TransactionColumn.DataSource, ColumnKind.Text, null, 130, false),
 
-        // Not sortable (the database sort list is fixed), hidden until ticked in the Columns picker, and exportable like the rest.
+        // Hidden until ticked in the Columns picker (except the first two narrations), exportable like the rest. All sort on the server;
+        // sorting by a narration has no index and reads the whole result, so on hundreds of thousands of rows it takes a moment.
         new("Running balance", nameof(TransactionRecord.RunningBalance), TransactionColumn.RunningBalance, ColumnKind.Number, "N2", 130, false),
-        new("Discount", nameof(TransactionRecord.Discount), null, ColumnKind.Number, "N2", 100, false),
-        new("Branch code", nameof(TransactionRecord.BranchCode), null, ColumnKind.Mono, null, 100, false),
-        new("Plot no", nameof(TransactionRecord.PlotNo), null, ColumnKind.Mono, null, 90, false),
-        new("Street no", nameof(TransactionRecord.StreetNo), null, ColumnKind.Mono, null, 90, false),
-        new("Narration 1", nameof(TransactionRecord.Narration1), null, ColumnKind.Text, null, 240),
-        new("Narration 2", nameof(TransactionRecord.Narration2), null, ColumnKind.Text, null, 240),
-        new("Narration 3", nameof(TransactionRecord.Narration3), null, ColumnKind.Text, null, 240, false),
-        new("Narration 4", nameof(TransactionRecord.Narration4), null, ColumnKind.Text, null, 240, false),
-        new("Narration 5", nameof(TransactionRecord.Narration5), null, ColumnKind.Text, null, 240, false),
-        new("CNIC in narration", nameof(TransactionRecord.NarrationCnic), null, ColumnKind.Mono, null, 140, false),
+        new("Discount", nameof(TransactionRecord.Discount), TransactionColumn.Discount, ColumnKind.Number, "N2", 100, false),
+        new("Branch code", nameof(TransactionRecord.BranchCode), TransactionColumn.BranchCode, ColumnKind.Mono, null, 100, false),
+        new("Plot no", nameof(TransactionRecord.PlotNo), TransactionColumn.PlotNo, ColumnKind.Mono, null, 90, false),
+        new("Street no", nameof(TransactionRecord.StreetNo), TransactionColumn.StreetNo, ColumnKind.Mono, null, 90, false),
+        new("Narration 1", nameof(TransactionRecord.Narration1), TransactionColumn.Narration1, ColumnKind.Text, null, 240),
+        new("Narration 2", nameof(TransactionRecord.Narration2), TransactionColumn.Narration2, ColumnKind.Text, null, 240),
+        new("Narration 3", nameof(TransactionRecord.Narration3), TransactionColumn.Narration3, ColumnKind.Text, null, 240, false),
+        new("Narration 4", nameof(TransactionRecord.Narration4), TransactionColumn.Narration4, ColumnKind.Text, null, 240, false),
+        new("Narration 5", nameof(TransactionRecord.Narration5), TransactionColumn.Narration5, ColumnKind.Text, null, 240, false),
+        new("CNIC in narration", nameof(TransactionRecord.NarrationCnic), TransactionColumn.NarrationCnic, ColumnKind.Mono, null, 140, false),
     };
 
     /// <summary>Which columns are shown (the "Columns" picker). The defaults leave out the rarely needed ones.</summary>

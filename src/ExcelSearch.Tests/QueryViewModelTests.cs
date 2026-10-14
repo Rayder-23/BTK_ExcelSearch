@@ -496,9 +496,8 @@ public class QueryViewModelTests
         Assert.Equal(30, vm.Columns.Select(c => c.Path).Distinct().Count());
         var sortable = vm.Columns.Where(c => c.Sort is not null).Select(c => c.Sort).ToArray();
         Assert.Equal(sortable.Length, sortable.Distinct().Count());
-        Assert.Equal(20, sortable.Length);                        // exactly the TransactionColumn whitelist
-        Assert.Equal(new[] { "Discount", "Branch code", "Plot no", "Street no", "Narration 1", "Narration 2", "Narration 3", "Narration 4", "Narration 5", "CNIC in narration" },
-            vm.Columns.Where(c => c.Sort is null).Select(c => c.Header));
+        Assert.Equal(30, sortable.Length);                        // every column sorts on the server: all 30 are in the TransactionColumn whitelist
+        Assert.Empty(vm.Columns.Where(c => c.Sort is null));
     }
 
     // ---- empty and error states ------------------------------------------------------------------------
