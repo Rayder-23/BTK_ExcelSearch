@@ -101,7 +101,7 @@ public sealed record TransactionFilter
         var digits = new string(c.Value!.Where(char.IsAsciiDigit).ToArray());
         // Typed text with no digits at all (e.g. "abc") cannot match any CNIC; keep it so the search returns nothing
         // instead of silently ignoring the box.
-        return c with { Value = digits.Length > 0 ? digits : c.Value.Trim() };
+        return c with { Value = digits.Length > 0 ? digits : c.Value!.Trim() };
     }
 
     private static IReadOnlyList<string> CleanList(IReadOnlyList<string>? values) =>

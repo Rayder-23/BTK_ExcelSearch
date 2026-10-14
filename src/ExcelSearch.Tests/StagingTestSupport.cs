@@ -141,13 +141,13 @@ public sealed class SqliteOps : IProviderOps
     public string Name => "SQLite";
 
     public Task<int> CountTransactionsWithPrefixAsync(AppDbContext db, string prefix) =>
-        db.Transactions.CountAsync(t => t.PayOrderNo.StartsWith(prefix));
+        db.Transactions.CountAsync(t => t.PayOrderNo!.StartsWith(prefix));
 
     public Task DeleteStagingAsync(AppDbContext db, int batchId) =>
         db.ImportStagings.Where(s => s.ImportBatchId == batchId).ExecuteDeleteAsync();
 
     public Task DeleteTransactionsWithPrefixAsync(AppDbContext db, string prefix) =>
-        db.Transactions.Where(t => t.PayOrderNo.StartsWith(prefix)).ExecuteDeleteAsync();
+        db.Transactions.Where(t => t.PayOrderNo!.StartsWith(prefix)).ExecuteDeleteAsync();
 
     public async Task<(bool, string)> ReaderIsolationAsync(AppDbContext db)
     {

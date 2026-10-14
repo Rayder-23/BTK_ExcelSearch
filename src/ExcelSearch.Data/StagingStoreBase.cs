@@ -108,7 +108,7 @@ public abstract class StagingStoreBase : IStagingStore
         var orders = page.Rows.Select(r => r.PayOrderNo!).Distinct().ToList();
         await using var db = await Factory.CreateDbContextAsync(ct).ConfigureAwait(false);
         var existing = await db.Transactions.AsNoTracking()
-            .Where(t => orders.Contains(t.PayOrderNo))
+            .Where(t => orders.Contains(t.PayOrderNo!))
             .ToListAsync(ct).ConfigureAwait(false);
         var byKey = existing.ToDictionary(
             t => (t.PayOrderNo!.ToUpperInvariant(), t.TxnRefSeqNo!.ToUpperInvariant()), t => t);
