@@ -5,6 +5,12 @@ Version 1.0 · 13/10/2026
 ExcelSearch is published as a **framework-dependent** win-x64 package (many files, not a single exe, no trimming). The package is built
 by `Scripts/publish.ps1` into `publish/` and is copied to each machine as a folder.
 
+## Decision: ReadyToRun is not enabled (2026-10-14)
+
+The first start after a publish takes about 4-5 s because the code is compiled as it starts. ReadyToRun would precompile it, but the gain
+is small (startup only; imports and queries run the same), and it makes the package 2-3 times larger and publishing slower. Decision: do
+not enable it for now. Revisit if users complain about start-up time (`<PublishReadyToRun>true</PublishReadyToRun>` in the csproj).
+
 ## Requirement on every machine
 
 **.NET 8 Desktop Runtime (x64), or a newer major version.** The project sets `RollForward=LatestMajor`, so a machine that only has .NET 9

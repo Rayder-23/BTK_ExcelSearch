@@ -1,5 +1,5 @@
 # ExcelSearch Database Schema
-Version: 1.34 | Last Updated: 2026-10-14
+Version: 1.35 | Last Updated: 2026-10-14
 Database: ExcelSearch
 Server: LOCAL
 
@@ -75,7 +75,7 @@ Business columns (Excel header → column)
 | Column | Type | Null | Excel header | Notes |
 |---|---|---|---|---|
 | ValueDate | date | NOT NULL | Value Date | |
-| BranchCode | nvarchar(20) | NULL | Br. Code | |
+| BranchCode | nvarchar(20) | NULL | Br. Code | OPEN QUESTION (2026-10-14): 24 of the 50,921 rows of the real statement file are rejected as Invalid because their Br. Code is longer than 20 characters (up to 35; those cells hold more than a code). Decision pending: widen the column or keep rejecting. See the note under Change History. |
 | BranchName | nvarchar(100) | NULL | Branch Name | |
 | RegNo | nvarchar(50) | NULL | Reg No | |
 | ApplicationNo | nvarchar(50) | NULL | Application no | |
@@ -197,3 +197,4 @@ class (`TransactionQueryServiceBase`); `SqliteTransactionQueryService` overrides
 - 2026-10-13: Local SQLite provider added (Import pipeline only). New script `Scripts/db/sqlite/001_create_schema.sql` (`PRAGMA user_version = 1`), embedded in the app. NO change to the SQL Server schema, scripts or the scaffolded model. See "Local SQLite database" above for the type mapping and differences. `WITHOUT ROWID` was measured for `Transactions` and `ImportStaging` and not used (docs/Performance.md section 9).
 - 2026-10-13: Query screen enabled on the Local DB (SQLite). NO schema change and no new index: the 500,000-row run (docs/Performance.md section 10) had no search over about 1.1 s. The name filter gained a Contains / Starts-with mode (`TransactionFilter.CustomerNameMode`) on both databases; Starts-with can use `IX_Transactions_CustomerName` on SQL Server.
 - 2026-10-14: **Surrogate primary key (key-less import).** Ran `Scripts/db/006_surrogate_key.sql` on the local `ExcelSearch` database (3,040 rows at the time; all kept their keys and values): `Transactions.Id` became the clustered PRIMARY KEY, `PayOrderNo` / `TxnRefSeqNo` became NULLable with a filtered unique index for rows that have both, `SlipNo` / `NarrationCnic` added to `Transactions` and `ImportStaging`, new indexes added (see Indexes). `ImportStaging.Status` gained code 6. Re-run on a copy and on a fresh database built from `init_db.sql` (which now includes 006) with the same result; `Scripts/db/rollback/006_rollback.sql` tested too. SQLite: new `002_surrogate_key.sql` (user_version 2), tested on a version-1 file with data. EF model re-scaffolded. Why and how: `Docs/KeylessImport.md`.
+- 2026-10-14: **Open question, not decided: widen `BranchCode`?** `BranchCode` is `nvarchar(20)` (SQLite: not enforced, but the parser applies the same limit). In the real statement file, 24 of 50,921 rows have a Br. Code of 21-35 characters and are therefore Invalid (the other 50,897 import). No schema change was made, so those rows stay rejected; they can be exported from the Invalid tab and fixed in Excel. If this comes up again, the choices are: (a) leave as is, (b) widen to e.g. `nvarchar(50)` (needs a new numbered SQL Server script, a new numbered SQLite script, a rollback note, `init_db.sql`, the re-scaffolded model, the parser limit in `ExcelParser`/`ImportRow`, the `ImportStaging` column, and this file), or (c) truncate instead of reject (loses text; not recommended). Context: `Docs/KeylessImport.md` > Known gaps.
