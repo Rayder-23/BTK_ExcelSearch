@@ -122,9 +122,28 @@ public sealed partial class SqlServerStagingStore : StagingStoreBase
               AND g.Cnt > 1 AND (g.MinHash <> g.MaxHash OR g.Rn > 1);
             """, ct).ConfigureAwait(false);
 
-        // (b) Rows still Pending: compare with dbo.Transactions on the full business key.
-        //     No match -> New (2); same hash -> ExactDuplicate (3); different hash -> Conflict (5),
-        //     remembering the hash we saw so commit can detect that the row changed since the preview.
+        // (a2) Repeats inside the file among rows WITHOUT a full key: identical content (same RowHash) repeats are
+        //      FileDuplicates (the first copy stays Pending and is classified below). They are flagged, not rejected,
+        //      and are imported unless the user chooses to skip flagged duplicates.
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            ;WITH g AS (
+                SELECT s.ExcelRowNumber,
+                       ROW_NUMBER() OVER (PARTITION BY s.RowHash ORDER BY s.ExcelRowNumber) AS Rn
+                FROM dbo.ImportStaging AS s
+                WHERE s.ImportBatchId = {batchId}
+                  AND s.Status = 0
+                  AND (s.PayOrderNo IS NULL OR s.TxnRefSeqNo IS NULL)
+            )
+            UPDATE s
+            SET Status = 4
+            FROM dbo.ImportStaging AS s
+            JOIN g ON g.ExcelRowNumber = s.ExcelRowNumber
+            WHERE s.ImportBatchId = {batchId} AND g.Rn > 1;
+            """, ct).ConfigureAwait(false);
+
+        // (b) Rows still Pending: compare with dbo.Transactions (the rule is in StatusSql: by full key for keyed rows,
+        //     by content and slip number for key-less ones). A keyed match remembers the hash we saw so commit can
+        //     detect that the row changed since the preview.
         //     Done in row-number ranges (see ClassifyChunk) to avoid table-level lock escalation.
         var maxRow = await db.ImportStagings
             .Where(s => s.ImportBatchId == batchId && s.Status == (byte)RowStatus.Pending)
@@ -133,19 +152,12 @@ public sealed partial class SqlServerStagingStore : StagingStoreBase
         for (var lo = 0; maxRow is not null && lo <= maxRow; lo += ClassifyChunk)
         {
             var hi = lo + ClassifyChunk - 1;
-            await db.Database.ExecuteSqlInterpolatedAsync($"""
-                UPDATE s
-                SET Status = CASE WHEN t.PayOrderNo IS NULL THEN 2
-                                  WHEN t.RowHash = s.RowHash THEN 3
-                                  ELSE 5 END,
-                    ExistingRowHash = CASE WHEN t.PayOrderNo IS NULL THEN NULL ELSE t.RowHash END
-                FROM dbo.ImportStaging AS s
-                LEFT JOIN dbo.Transactions AS t
-                       ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo
-                WHERE s.ImportBatchId = {batchId}
-                  AND s.Status = 0
-                  AND s.ExcelRowNumber BETWEEN {lo} AND {hi};
-                """, ct).ConfigureAwait(false);
+            await db.Database.ExecuteSqlRawAsync(
+                "UPDATE s SET Status = " + StatusSql.NewStatus + ", ExistingRowHash = " + StatusSql.ExistingHash + " " +
+                "FROM dbo.ImportStaging AS s " +
+                "LEFT JOIN dbo.Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo " +
+                "WHERE s.ImportBatchId = {0} AND s.Status = 0 AND s.ExcelRowNumber BETWEEN {1} AND {2};",
+                new object[] { batchId, lo, hi }, ct).ConfigureAwait(false);
         }
     }
 

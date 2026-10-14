@@ -255,13 +255,18 @@ public partial class StatusTabViewModel : ObservableObject
                               "conflicts you leave unticked are skipped.",
         RowStatus.Invalid => "These rows have problems and will not be imported. The Error column says what to fix; " +
                              "use Export invalid rows to fix them in Excel and import that file again.",
-        RowStatus.ExactDuplicate => "These rows are already in the database with identical values. They are skipped.",
-        RowStatus.FileDuplicate => "These rows repeat an identical earlier row of this file. Only the first copy is used.",
+        RowStatus.ExactDuplicate => "These rows are already in the database with identical values. Rows that have a Pay order no + Txn ref are skipped. " +
+                                    "Rows without them are flagged and imported anyway, unless you tick Skip flagged duplicates.",
+        RowStatus.FileDuplicate => "These rows repeat an identical earlier row of this file. Rows that have a Pay order no + Txn ref are skipped. " +
+                                   "Rows without them are flagged and imported anyway (the first copy is under New), unless you tick Skip flagged duplicates.",
+        RowStatus.LikelyDuplicate => "These rows have the same slip number, date, account and amounts as a row in the database, but other values differ. " +
+                                     "It may be the same transaction or a different one, so they are flagged and imported unless you tick Skip flagged duplicates.",
         _ => "",
     };
 
-    // ExcelRowNumber first everywhere; ErrorText right after it on the Invalid tab. Keys and amounts are monospaced
-    // so digits line up; the Conflict tab shows the Overwrite checkbox and what differs instead of the amount columns.
+    // ExcelRowNumber first everywhere; ErrorText right after it on the Invalid tab. Slip numbers, keys and amounts are monospaced
+    // so digits line up; the Conflict tab shows the Overwrite checkbox, the pay order no + txn ref and what differs.
+    // The other tabs show what identifies a statement row: slip number, narration 1, amounts (most rows have no pay order no).
     private static IReadOnlyList<GridColumn> BuildColumns(RowStatus status)
     {
         var cols = new List<GridColumn>
@@ -275,11 +280,10 @@ public partial class StatusTabViewModel : ObservableObject
         if (status == RowStatus.Conflict)
             cols.Add(new("Overwrite", nameof(PreviewRow.IsOverwrite), ColumnKind.Overwrite, Width: 112));
 
-        cols.Add(new("Pay order no", "Row.PayOrderNo", ColumnKind.Mono, Width: 150));
-        cols.Add(new("Txn ref", "Row.TxnRefSeqNo", ColumnKind.Mono, Width: 90));
-
         if (status == RowStatus.Conflict)
         {
+            cols.Add(new("Pay order no", "Row.PayOrderNo", ColumnKind.Mono, Width: 150));
+            cols.Add(new("Txn ref", "Row.TxnRefSeqNo", ColumnKind.Mono, Width: 90));
             cols.Add(new("Changes", "Conflict.ChangeCount", ColumnKind.Number, Width: 96));
             cols.Add(new("What differs", "Conflict.Summary", ColumnKind.Text, Width: 560));
             return cols;
@@ -288,12 +292,12 @@ public partial class StatusTabViewModel : ObservableObject
         cols.AddRange(new GridColumn[]
         {
             new("Value date", "Row.ValueDate", ColumnKind.Mono, "dd-MMM-yyyy", 110),
-            new("Customer", "Row.CustomerName", ColumnKind.Text, Width: 210),
+            new("Slip no", "Row.SlipNo", ColumnKind.Mono, Width: 100),
+            new("Customer", "Row.CustomerName", ColumnKind.Text, Width: 190),
             new("Debit", "Row.Debit", ColumnKind.Number, "N2", 120),
             new("Credit", "Row.Credit", ColumnKind.Number, "N2", 120),
-            new("Balance", "Row.RunningBalance", ColumnKind.Number, "N2", 130),
             new("Bank", "Row.BankName", ColumnKind.Text, Width: 140),
-            new("Project", "Row.Project", ColumnKind.Text, Width: 220),
+            new("Narration 1", "Row.Narration1", ColumnKind.Text, Width: 220),
         });
         return cols;
     }

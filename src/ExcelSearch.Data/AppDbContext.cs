@@ -80,6 +80,9 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.Narration3).HasMaxLength(500);
             entity.Property(e => e.Narration4).HasMaxLength(500);
             entity.Property(e => e.Narration5).HasMaxLength(500);
+            entity.Property(e => e.NarrationCnic)
+                .HasMaxLength(20)
+                .IsUnicode(false);
             entity.Property(e => e.PayOrderNo).HasMaxLength(50);
             entity.Property(e => e.PlotNo).HasMaxLength(50);
             entity.Property(e => e.Project).HasMaxLength(100);
@@ -89,6 +92,7 @@ public partial class AppDbContext : DbContext
                 .IsUnicode(false)
                 .IsFixedLength();
             entity.Property(e => e.RunningBalance).HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.SlipNo).HasMaxLength(30);
             entity.Property(e => e.StreetNo).HasMaxLength(50);
             entity.Property(e => e.TxnRefSeqNo).HasMaxLength(50);
 
@@ -100,8 +104,6 @@ public partial class AppDbContext : DbContext
 
         modelBuilder.Entity<Transaction>(entity =>
         {
-            entity.HasKey(e => new { e.PayOrderNo, e.TxnRefSeqNo });
-
             entity.HasIndex(e => e.ApplicationNo, "IX_Transactions_ApplicationNo");
 
             entity.HasIndex(e => new { e.BankName, e.AccountNo }, "IX_Transactions_Bank_Account");
@@ -116,16 +118,25 @@ public partial class AppDbContext : DbContext
 
             entity.HasIndex(e => e.ImportBatchId, "IX_Transactions_ImportBatchId");
 
+            entity.HasIndex(e => e.NarrationCnic, "IX_Transactions_NarrationCnic").HasFilter("([NarrationCnic] IS NOT NULL)");
+
+            entity.HasIndex(e => e.PayOrderNo, "IX_Transactions_PayOrderNo");
+
             entity.HasIndex(e => e.Project, "IX_Transactions_Project");
+
+            entity.HasIndex(e => e.RowHash, "IX_Transactions_RowHash");
+
+            entity.HasIndex(e => e.SlipNo, "IX_Transactions_SlipNo").HasFilter("([SlipNo] IS NOT NULL)");
 
             entity.HasIndex(e => e.TxnRefSeqNo, "IX_Transactions_TxnRefSeqNo");
 
             entity.HasIndex(e => e.ValueDate, "IX_Transactions_ValueDate");
 
-            entity.HasIndex(e => e.Id, "UQ_Transactions_Id").IsUnique();
+            entity.HasIndex(e => new { e.PayOrderNo, e.TxnRefSeqNo }, "UX_Transactions_Key")
+                .IsUnique()
+                .HasFilter("([PayOrderNo] IS NOT NULL AND [TxnRefSeqNo] IS NOT NULL)");
 
-            entity.Property(e => e.PayOrderNo).HasMaxLength(50);
-            entity.Property(e => e.TxnRefSeqNo).HasMaxLength(50);
+            entity.Property(e => e.Id).HasDefaultValueSql("(newsequentialid())");
             entity.Property(e => e.AccountNo).HasMaxLength(50);
             entity.Property(e => e.ApplicationNo).HasMaxLength(50);
             entity.Property(e => e.BankName).HasMaxLength(100);
@@ -146,12 +157,15 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.Debit).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.Discount).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.DownPaymentAmount).HasColumnType("decimal(18, 2)");
-            entity.Property(e => e.Id).HasDefaultValueSql("(newsequentialid())");
             entity.Property(e => e.Narration1).HasMaxLength(500);
             entity.Property(e => e.Narration2).HasMaxLength(500);
             entity.Property(e => e.Narration3).HasMaxLength(500);
             entity.Property(e => e.Narration4).HasMaxLength(500);
             entity.Property(e => e.Narration5).HasMaxLength(500);
+            entity.Property(e => e.NarrationCnic)
+                .HasMaxLength(20)
+                .IsUnicode(false);
+            entity.Property(e => e.PayOrderNo).HasMaxLength(50);
             entity.Property(e => e.PlotNo).HasMaxLength(50);
             entity.Property(e => e.Project).HasMaxLength(100);
             entity.Property(e => e.RegNo).HasMaxLength(50);
@@ -160,7 +174,9 @@ public partial class AppDbContext : DbContext
                 .IsUnicode(false)
                 .IsFixedLength();
             entity.Property(e => e.RunningBalance).HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.SlipNo).HasMaxLength(30);
             entity.Property(e => e.StreetNo).HasMaxLength(50);
+            entity.Property(e => e.TxnRefSeqNo).HasMaxLength(50);
             entity.Property(e => e.UpdatedAt).HasPrecision(0);
 
             entity.HasOne(d => d.ImportBatch).WithMany(p => p.Transactions)

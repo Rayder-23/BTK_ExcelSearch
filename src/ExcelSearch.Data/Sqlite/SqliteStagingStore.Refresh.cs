@@ -8,42 +8,35 @@ namespace ExcelSearch.Data.Sqlite;
 // Re-check against the database.
 public sealed partial class SqliteStagingStore
 {
-    // New (2), Already in database (3) and Conflict (5) rows are recomputed against Transactions on BOTH key columns. Only rows whose
+    // New (2), Already in database (3), Conflict (5) and Possible duplicate (6) rows are recomputed against Transactions by the same rule
+    // as classification (SqliteStatusSql: by key for keyed rows, by content / slip number for key-less ones). Only rows whose
     // status or ExistingRowHash actually changes are listed in "chg", so an unchanged batch writes nothing. Overwrite survives only for a
     // row that was a Conflict, still is one, and whose existing row did not change; in every other changed case it is reset to 0.
     // SQLite has no OUTPUT clause (and RETURNING only gives the new values), so the same "chg" CTE is used twice under one write
     // lock: once to count the moves, once to apply them. Nothing can change between the two statements. "chg" is MATERIALIZED, so
     // the UPDATE works from a snapshot of the changed rows taken before it writes (it reads the table it updates).
-    private const string ChangedRowsCte = """
-        WITH cur AS (
-            SELECT s.ExcelRowNumber AS rn, s.Status AS OldStatus, s.Overwrite AS OldOverwrite, s.ExistingRowHash AS OldExisting,
-                   CASE WHEN t.PayOrderNo IS NULL THEN 2 WHEN t.RowHash = s.RowHash THEN 3 ELSE 5 END AS NewStatus,
-                   CASE WHEN t.PayOrderNo IS NULL THEN NULL ELSE t.RowHash END AS NewExisting
-            FROM ImportStaging AS s
-            LEFT JOIN Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo
-            WHERE s.ImportBatchId = $b AND s.Status IN (2, 3, 5)
-        ),
-        chg AS MATERIALIZED (
-            SELECT rn, OldStatus, OldOverwrite, NewStatus, NewExisting,
-                   CASE WHEN NewStatus = 5 AND OldStatus = 5 AND OldOverwrite = 1 AND OldExisting = NewExisting THEN 1 ELSE 0 END AS NewOverwrite
-            FROM cur
-            WHERE OldStatus <> NewStatus OR IFNULL(OldExisting, '') <> IFNULL(NewExisting, '')
-        )
-        """;
+    private static readonly string ChangedRowsCte =
+        "WITH cur AS (" +
+        "SELECT s.ExcelRowNumber AS rn, s.Status AS OldStatus, s.Overwrite AS OldOverwrite, s.ExistingRowHash AS OldExisting, " +
+        SqliteStatusSql.NewStatus + " AS NewStatus, " + SqliteStatusSql.ExistingHash + " AS NewExisting " +
+        "FROM ImportStaging AS s " +
+        "LEFT JOIN Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo " +
+        "WHERE s.ImportBatchId = $b AND s.Status IN (2, 3, 5, 6)), " +
+        "chg AS MATERIALIZED (" +
+        "SELECT rn, OldStatus, OldOverwrite, NewStatus, NewExisting, " +
+        "CASE WHEN NewStatus = 5 AND OldStatus = 5 AND OldOverwrite = 1 AND OldExisting = NewExisting THEN 1 ELSE 0 END AS NewOverwrite " +
+        "FROM cur " +
+        "WHERE OldStatus <> NewStatus OR IFNULL(OldExisting, '') <> IFNULL(NewExisting, '')) ";
 
-    private const string CountMovesSql = ChangedRowsCte + """
+    private static readonly string CountMovesSql = ChangedRowsCte +
+        "SELECT OldStatus, NewStatus, COUNT(*), SUM(CASE WHEN OldOverwrite = 1 AND NewOverwrite = 0 THEN 1 ELSE 0 END) " +
+        "FROM chg GROUP BY OldStatus, NewStatus;";
 
-        SELECT OldStatus, NewStatus, COUNT(*), SUM(CASE WHEN OldOverwrite = 1 AND NewOverwrite = 0 THEN 1 ELSE 0 END)
-        FROM chg GROUP BY OldStatus, NewStatus;
-        """;
-
-    private const string ApplyMovesSql = ChangedRowsCte + """
-
-        UPDATE ImportStaging
-        SET Status = chg.NewStatus, ExistingRowHash = chg.NewExisting, Overwrite = chg.NewOverwrite
-        FROM chg
-        WHERE ImportStaging.ImportBatchId = $b AND ImportStaging.ExcelRowNumber = chg.rn;
-        """;
+    private static readonly string ApplyMovesSql = ChangedRowsCte +
+        "UPDATE ImportStaging " +
+        "SET Status = chg.NewStatus, ExistingRowHash = chg.NewExisting, Overwrite = chg.NewOverwrite " +
+        "FROM chg " +
+        "WHERE ImportStaging.ImportBatchId = $b AND ImportStaging.ExcelRowNumber = chg.rn;";
 
     public override async Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default)
     {

@@ -5,9 +5,9 @@ namespace ExcelSearch.Data.Entities;
 
 public partial class Transaction
 {
-    public string PayOrderNo { get; set; } = null!;
+    public string? PayOrderNo { get; set; }
 
-    public string TxnRefSeqNo { get; set; } = null!;
+    public string? TxnRefSeqNo { get; set; }
 
     public Guid Id { get; set; }
 
@@ -72,6 +72,10 @@ public partial class Transaction
     public string? Narration4 { get; set; }
 
     public string? Narration5 { get; set; }
+
+    public string? SlipNo { get; set; }
+
+    public string? NarrationCnic { get; set; }
 
     public virtual ImportBatch ImportBatch { get; set; } = null!;
 }

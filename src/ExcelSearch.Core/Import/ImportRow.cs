@@ -35,6 +35,12 @@ public sealed class ImportRow
     public string? Narration4 { get; set; }
     public string? Narration5 { get; set; }
 
+    /// <summary>Derived from Narration1 (see NarrationExtractor). Not part of RowHash.</summary>
+    public string? SlipNo { get; set; }
+
+    /// <summary>13-digit CNIC-like number found in Narrations 2-5, digits only. Derived; not part of RowHash.</summary>
+    public string? NarrationCnic { get; set; }
+
     /// <summary>SHA-256 hex of the normalized business fields (see RowHasher).</summary>
     public string RowHash { get; set; } = "";
 

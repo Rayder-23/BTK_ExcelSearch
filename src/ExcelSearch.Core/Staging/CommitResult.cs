@@ -21,13 +21,16 @@ public sealed record CommitResult(
     bool Success,
     CommitFailure FailureReason,
     string Message,
+    /// <summary>Rows with no existing counterpart (flagged duplicates imported anyway are counted in <see cref="ImportedFlaggedDuplicates"/>).</summary>
     int NewRows = 0,
     int UpdatedRows = 0,
     int SkippedExactDuplicates = 0,
     int SkippedFileDuplicates = 0,
     int SkippedConflicts = 0,
     int RejectedRows = 0,
-    double ElapsedSeconds = 0);
+    double ElapsedSeconds = 0,
+    int ImportedFlaggedDuplicates = 0,
+    int SkippedLikelyDuplicates = 0);
 
 /// <summary>What <see cref="IStagingStore.CleanupStaleBatchesAsync"/> did.</summary>
 public sealed record CleanupResult(int StaleBatchesDiscarded, int LeftoverBatchesCleaned);

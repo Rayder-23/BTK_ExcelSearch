@@ -37,18 +37,19 @@ public class SampleFilesTests
     }
 
     [Fact]
-    public void Invalid_file_has_13_invalid_rows_and_a_clashing_pair()
+    public void Invalid_file_has_11_invalid_rows_and_a_clashing_pair()
     {
         var (rows, errors) = Parse("02_invalid_rows.xlsx");
         Assert.Empty(errors);
         Assert.Equal(31, rows.Count);                    // the blank row is skipped
-        Assert.Equal(13, rows.Count(r => !r.IsValid));
-        Assert.Equal(18, rows.Count(r => r.IsValid));    // 16 good + the 2 clashing rows (invalid only once classified)
+        Assert.Equal(11, rows.Count(r => !r.IsValid));
+        Assert.Equal(20, rows.Count(r => r.IsValid));    // 16 good + the 2 key-less rows + the 2 clashing rows (invalid only once classified)
 
         var clash = rows.Where(r => r.PayOrderNo == "PO-B-0026").ToList();
         Assert.Equal(2, clash.Count);
         Assert.NotEqual(clash[0].RowHash, clash[1].RowHash);
-        Assert.Equal(3, rows.Single(r => r.PayOrderNo is null && r.TxnRefSeqNo is null).Errors.Count);
+        var noKeyNoDate = rows.Single(r => r.PayOrderNo is null && r.TxnRefSeqNo is null);
+        Assert.Equal("ValueDate", Assert.Single(noKeyNoDate.Errors).Field);   // no key is fine; the missing date is the only error
     }
 
     [Fact]
@@ -88,7 +89,21 @@ public class SampleFilesTests
     {
         var (rows, errors) = Parse("05_missing_required_header.xlsx");
         Assert.Empty(rows);
-        Assert.Contains(errors, e => e.Contains("payorder no", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(errors, e => e.Contains("Value Date", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Keyless_statement_file_is_all_valid_and_slips_and_cnics_are_extracted()
+    {
+        var (rows, errors) = Parse("11_keyless_statement.xlsx");
+        Assert.Empty(errors);
+        Assert.Equal(109, rows.Count);
+        Assert.All(rows, r => Assert.True(r.IsValid, string.Join("; ", r.Errors.Select(e => e.Message))));
+        Assert.Equal(106, rows.Count(r => r.PayOrderNo is null && r.TxnRefSeqNo is null));   // 100 + 6 repeats
+        Assert.Equal(3, rows.Count(r => r.PayOrderNo is not null));                           // the keyed rows of the mixed file
+        Assert.All(rows.Where(r => r.PayOrderNo is null), r => Assert.Matches("^[0-9]{8}$", r.SlipNo!));
+        Assert.Equal(35, rows.Count(r => r.NarrationCnic is not null && r.PayOrderNo is null)); // every third statement row (33) plus 2 of the repeats
+        Assert.Equal(100, rows.Where(r => r.PayOrderNo is null).Select(r => r.RowHash).Distinct().Count());   // 6 are exact repeats
     }
 
     [Fact]

@@ -310,14 +310,12 @@ public sealed class ExcelParser : IExcelParser
             }
         }
 
-        // Required fields: one error per missing field (a date that failed to parse already has its own error).
-        if (row.PayOrderNo is null)
-            row.Errors.Add(new RowError(nameof(ImportRow.PayOrderNo), "PayOrderNo is required"));
-        if (row.TxnRefSeqNo is null)
-            row.Errors.Add(new RowError(nameof(ImportRow.TxnRefSeqNo), "TxnRefSeqNo is required"));
+        // The only required field (a date that failed to parse already has its own error).
+        // PayOrderNo / TxnRefSeqNo are optional: rows without them are identified by their content (see NarrationExtractor).
         if (row.ValueDate is null && !dateFailed)
             row.Errors.Add(new RowError(nameof(ImportRow.ValueDate), "ValueDate is required"));
 
+        NarrationExtractor.Apply(row);
         row.RowHash = RowHasher.Compute(row);
         return row;
     }

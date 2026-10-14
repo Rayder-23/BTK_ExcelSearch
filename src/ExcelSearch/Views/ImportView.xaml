@@ -113,10 +113,12 @@
                                        Accent="{StaticResource AmberBrush}" AutomationProperties.AutomationId="CardConflicts" />
                     <views:SummaryCard Value="{Binding InvalidCount}" Label="Invalid" Caption="have errors, not imported"
                                        Accent="{StaticResource RedBrush}" AutomationProperties.AutomationId="CardInvalid" />
-                    <views:SummaryCard Value="{Binding ExactDuplicateCount}" Label="Already in database" Caption="identical, skipped"
+                    <views:SummaryCard Value="{Binding ExactDuplicateCount}" Label="Already in database" Caption="identical, flagged"
                                        Accent="{StaticResource SlateBrush}" AutomationProperties.AutomationId="CardExact" />
-                    <views:SummaryCard Value="{Binding FileDuplicateCount}" Label="Repeated in file" Caption="extra copies, skipped"
+                    <views:SummaryCard Value="{Binding FileDuplicateCount}" Label="Repeated in file" Caption="extra copies, flagged"
                                        Accent="{StaticResource SlateBrush}" AutomationProperties.AutomationId="CardFileDup" />
+                    <views:SummaryCard Value="{Binding LikelyDuplicateCount}" Label="Possible duplicates" Caption="same slip and amount, flagged"
+                                       Accent="{StaticResource SlateBrush}" AutomationProperties.AutomationId="CardLikelyDup" />
                 </StackPanel>
 
                 <!-- One tab per status. ItemsSource = a list of tab ViewModels (like @foreach over a model collection);
@@ -146,6 +148,17 @@
                             Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="CommitButton" />
                     <Button DockPanel.Dock="Right" Content="Discard" Command="{Binding DiscardCommand}" Margin="0,0,12,0"
                             Style="{StaticResource SecondaryButton}" AutomationProperties.AutomationId="DiscardButton" />
+
+                    <!-- Rows without a pay order no + txn ref that look like duplicates are imported anyway; this leaves them out. -->
+                    <CheckBox DockPanel.Dock="Right" Margin="0,0,18,0" VerticalAlignment="Center"
+                              IsChecked="{Binding SkipFlaggedDuplicates}"
+                              Visibility="{Binding HasFlagged, Converter={StaticResource BoolToVis}}"
+                              ToolTip="Flagged duplicates (already in the database, repeated in the file, possible duplicates) are imported unless this is ticked"
+                              AutomationProperties.AutomationId="SkipFlaggedCheckBox">
+                        <TextBlock>
+                            <Run Text="Skip flagged duplicates (" /><Run Text="{Binding FlaggedImportCount, Mode=OneWay, StringFormat=N0}" /><Run Text=")" />
+                        </TextBlock>
+                    </CheckBox>
 
                     <!-- Left side: the export of the Invalid tab (button, then progress while it runs). -->
                     <Button DockPanel.Dock="Left" Content="Export invalid rows..." Command="{Binding ExportInvalidCommand}"
@@ -194,21 +207,26 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+                            <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Text="New rows imported" FontWeight="SemiBold" Margin="0,5" />
                         <TextBlock Grid.Row="0" Grid.Column="1" Style="{StaticResource DoneValue}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource GreenBrush}"
                                    Text="{Binding LastCommit.NewRows, StringFormat=N0}" AutomationProperties.AutomationId="DoneNew" />
-                        <TextBlock Grid.Row="1" Text="Rows updated" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.UpdatedRows, StringFormat=N0}" />
-                        <TextBlock Grid.Row="2" Text="Already in the database (skipped)" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
-                        <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedExactDuplicates, StringFormat=N0}" />
-                        <TextBlock Grid.Row="3" Text="Repeated in the file (skipped)" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
-                        <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedFileDuplicates, StringFormat=N0}" />
-                        <TextBlock Grid.Row="4" Text="Conflicts (skipped)" Foreground="{StaticResource AmberBrush}" Margin="0,5" />
-                        <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedConflicts, StringFormat=N0}" />
-                        <TextBlock Grid.Row="5" Text="Invalid rows (not imported)" Foreground="{StaticResource RedBrush}" Margin="0,5" />
-                        <TextBlock Grid.Row="5" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.RejectedRows, StringFormat=N0}" />
+                        <TextBlock Grid.Row="1" Text="Flagged duplicates imported" FontWeight="SemiBold" Margin="0,5" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource DoneValue}" FontWeight="SemiBold"
+                                   Text="{Binding LastCommit.ImportedFlaggedDuplicates, StringFormat=N0}" AutomationProperties.AutomationId="DoneFlagged" />
+                        <TextBlock Grid.Row="2" Text="Rows updated" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.UpdatedRows, StringFormat=N0}" />
+                        <TextBlock Grid.Row="3" Text="Already in the database (skipped)" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedExactDuplicates, StringFormat=N0}" />
+                        <TextBlock Grid.Row="4" Text="Repeated in the file (skipped)" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedFileDuplicates, StringFormat=N0}" />
+                        <TextBlock Grid.Row="5" Text="Possible duplicates (skipped)" Foreground="{StaticResource MutedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="5" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedLikelyDuplicates, StringFormat=N0}" />
+                        <TextBlock Grid.Row="6" Text="Conflicts (skipped)" Foreground="{StaticResource AmberBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="6" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.SkippedConflicts, StringFormat=N0}" />
+                        <TextBlock Grid.Row="7" Text="Invalid rows (not imported)" Foreground="{StaticResource RedBrush}" Margin="0,5" />
+                        <TextBlock Grid.Row="7" Grid.Column="1" Style="{StaticResource DoneValue}" Text="{Binding LastCommit.RejectedRows, StringFormat=N0}" />
                     </Grid>
 
                     <Button Content="Import another file" Command="{Binding ImportAnotherCommand}" HorizontalAlignment="Left"

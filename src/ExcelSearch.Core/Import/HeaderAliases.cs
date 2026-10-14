@@ -8,11 +8,12 @@ namespace ExcelSearch.Core.Import;
 /// </summary>
 internal static class HeaderAliases
 {
-    /// <summary>Required fields, with the header text shown to the user when one is missing.</summary>
+    /// <summary>
+    /// Required fields, with the header text shown to the user when one is missing. Only Value Date: bank-statement
+    /// sheets carry no pay order / reference numbers (PayOrderNo and TxnRefSeqNo are optional).
+    /// </summary>
     public static readonly (string Field, string Display)[] Required =
     {
-        (nameof(ImportRow.PayOrderNo), "payorder no"),
-        (nameof(ImportRow.TxnRefSeqNo), "Txn Ref/ Seq No"),
         (nameof(ImportRow.ValueDate), "Value Date"),
     };
 

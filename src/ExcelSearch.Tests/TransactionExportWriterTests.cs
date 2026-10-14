@@ -50,7 +50,7 @@ public class TransactionExportWriterTests
     }
 
     [Fact]
-    public async Task Writer_null_columns_writes_all_28_and_bad_lists_are_refused_before_any_file_exists()
+    public async Task Writer_null_columns_writes_all_30_and_bad_lists_are_refused_before_any_file_exists()
     {
         async IAsyncEnumerable<IReadOnlyList<TransactionRecord>> Chunks()
         {
@@ -61,8 +61,8 @@ public class TransactionExportWriterTests
         try
         {
             await TransactionExportWriter.WriteAsync(Chunks(), ExportFormat.Csv, path, null, default, null);
-            Assert.Equal(28, QueryServiceContract.ParseCsv(File.ReadAllText(path, System.Text.Encoding.UTF8).TrimStart('\uFEFF'))[0].Count);
-            Assert.Equal(28, TransactionExportWriter.AllColumns.Count);
+            Assert.Equal(30, QueryServiceContract.ParseCsv(File.ReadAllText(path, System.Text.Encoding.UTF8).TrimStart('\uFEFF'))[0].Count);
+            Assert.Equal(30, TransactionExportWriter.AllColumns.Count);
             File.Delete(path);
 
             foreach (var bad in new[] { new string[0], new[] { "NotAColumn" }, new[] { "PayOrderNo", "PayOrderNo" }, new[] { "1; DROP TABLE x" }, new[] { "payorderno" } })

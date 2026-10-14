@@ -172,22 +172,33 @@ public sealed partial class SqliteStagingStore : StagingStoreBase
               AND g.Cnt > 1 AND (g.MinHash <> g.MaxHash OR g.Seq > 1);
             """, new[] { b }, ct).ConfigureAwait(false);
 
-        // (b) Rows still Pending: compare with Transactions on the full business key. No match -> New (2); same hash ->
-        //     ExactDuplicate (3); different hash -> Conflict (5), remembering the hash seen so commit can detect a change.
-        //     UPDATE ... FROM cannot LEFT JOIN its own target, so the lookup is a (materialized) subquery carrying the existing hash.
+        // (a2) Repeats inside the file among rows WITHOUT a full key: identical content (same RowHash) repeats are FileDuplicates
+        //      (the first copy stays Pending and is classified below). Flagged, not rejected: imported unless the user skips them.
         await db.Database.ExecuteSqlRawAsync("""
-            WITH x AS MATERIALIZED (
-                SELECT s.ExcelRowNumber AS RowNo, t.RowHash AS Hash
+            WITH g AS MATERIALIZED (
+                SELECT s.ExcelRowNumber AS RowNo,
+                       ROW_NUMBER() OVER (PARTITION BY s.RowHash ORDER BY s.ExcelRowNumber) AS Seq
                 FROM ImportStaging AS s
-                LEFT JOIN Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo
-                WHERE s.ImportBatchId = $b AND s.Status = 0
+                WHERE s.ImportBatchId = $b AND s.Status = 0 AND (s.PayOrderNo IS NULL OR s.TxnRefSeqNo IS NULL)
             )
             UPDATE ImportStaging
-            SET ExistingRowHash = x.Hash,
-                Status = CASE WHEN x.Hash IS NULL THEN 2 WHEN x.Hash = ImportStaging.RowHash THEN 3 ELSE 5 END
-            FROM x
-            WHERE ImportStaging.ImportBatchId = $b AND ImportStaging.ExcelRowNumber = x.RowNo;
+            SET Status = 4
+            FROM g
+            WHERE ImportStaging.ImportBatchId = $b AND ImportStaging.ExcelRowNumber = g.RowNo AND g.Seq > 1;
             """, new[] { new SqliteParameter("$b", batchId) }, ct).ConfigureAwait(false);
+
+        // (b) Rows still Pending: compare with Transactions (the rule is in SqliteStatusSql: by full key for keyed rows, by content and
+        //     slip number for key-less ones). A keyed match remembers the hash seen so commit can detect a change.
+        //     UPDATE ... FROM cannot LEFT JOIN its own target, so the lookup is a (materialized) subquery carrying the result.
+        await db.Database.ExecuteSqlRawAsync(
+            "WITH x AS MATERIALIZED (" +
+            "SELECT s.ExcelRowNumber AS RowNo, " + SqliteStatusSql.NewStatus + " AS NewStatus, " + SqliteStatusSql.ExistingHash + " AS Hash " +
+            "FROM ImportStaging AS s " +
+            "LEFT JOIN Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo " +
+            "WHERE s.ImportBatchId = $b AND s.Status = 0) " +
+            "UPDATE ImportStaging SET ExistingRowHash = x.Hash, Status = x.NewStatus FROM x " +
+            "WHERE ImportStaging.ImportBatchId = $b AND ImportStaging.ExcelRowNumber = x.RowNo;",
+            new[] { new SqliteParameter("$b", batchId) }, ct).ConfigureAwait(false);
     }
 
     // ---- discard ---------------------------------------------------------------------------------------------

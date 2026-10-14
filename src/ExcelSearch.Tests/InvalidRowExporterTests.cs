@@ -153,7 +153,7 @@ public class InvalidRowExporterTests : IDisposable
         using (var file = new ExcelParser().Parse(sample, null, CancellationToken.None))
             parsed = file.Rows.ToList();
         var invalid = parsed.Where(r => !r.IsValid).ToList();
-        Assert.Equal(13, invalid.Count);
+        Assert.Equal(11, invalid.Count);
 
         var fake = new FakeInvalidSource { Batch = BatchFor(sample) };
         fake.Errors.AddRange(invalid.Select(r => new InvalidRowError(r.ExcelRowNumber, string.Join("; ", r.Errors.Select(e => e.Message)))));
@@ -161,7 +161,7 @@ public class InvalidRowExporterTests : IDisposable
 
         var result = await new InvalidRowExporter(fake).ExportAsync(sample, 1, dest, null);
         Assert.Equal(ExportMode.SourceFile, result.Mode);
-        Assert.Equal(13, result.RowsWritten);
+        Assert.Equal(11, result.RowsWritten);
 
         // The extra columns ("Source Row", "Errors") must be ignored by the real parser; the same errors must come back.
         List<ImportRow> reparsed;
@@ -198,7 +198,7 @@ public class InvalidRowExporterTests : IDisposable
         List<ImportRow> fixedRows;
         using (var file = new ExcelParser().Parse(dest, null, CancellationToken.None))
             fixedRows = file.Rows.ToList();
-        Assert.Equal(13, fixedRows.Count);
+        Assert.Equal(11, fixedRows.Count);
         Assert.All(fixedRows, r => Assert.True(r.IsValid, string.Join("; ", r.Errors.Select(e => e.Message))));
     }
 

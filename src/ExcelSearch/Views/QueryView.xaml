@@ -232,6 +232,7 @@
                             <views:TextFilterBox DataContext="{Binding ApplicationNo}" Style="{StaticResource FilterRow}" AutomationProperties.AutomationId="ApplicationNo" />
                             <views:TextFilterBox DataContext="{Binding PayOrderNo}" Style="{StaticResource FilterRow}" AutomationProperties.AutomationId="PayOrderNo" />
                             <views:TextFilterBox DataContext="{Binding TxnRefSeqNo}" Style="{StaticResource FilterRow}" AutomationProperties.AutomationId="TxnRefSeqNo" />
+                            <views:TextFilterBox DataContext="{Binding SlipNo}" Style="{StaticResource FilterRow}" AutomationProperties.AutomationId="SlipNo" />
 
                             <Expander Style="{StaticResource MoreFilters}" AutomationProperties.AutomationId="MoreFilters" Margin="0,0,0,10">
                                 <StackPanel>

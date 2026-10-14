@@ -115,8 +115,8 @@ def f02_invalid() -> list:
         return r
 
     rows += [
-        bad(13, **{"payorder no": None}),                                          # missing PayOrderNo
-        bad(14, **{"Txn Ref/ Seq No": None}),                                      # missing Txn Ref
+        bad(13, **{"payorder no": None}),                                          # missing PayOrderNo: valid (key-less row)
+        bad(14, **{"Txn Ref/ Seq No": None}),                                      # missing Txn Ref: valid (key-less row)
         bad(15, **{"Value Date": None}),                                           # missing Value Date
         bad(16, **{"Value Date": "31/31/2024"}),                                   # impossible date
         bad(17, **{"Value Date": "April 3rd"}),                                    # not a date
@@ -127,7 +127,7 @@ def f02_invalid() -> list:
         bad(22, **{"payorder no": "PO-B-" + "9" * 60}),                            # key longer than 50 characters
         bad(23, **{"Br. Code": "B" * 30}),                                         # longer than 20 characters
         bad(24, **{"Run. Bal": "#DIV/0!"}),                                        # an Excel error value in the cell
-        bad(25, **{"payorder no": None, "Txn Ref/ Seq No": None, "Value Date": None}),   # three errors on one row
+        bad(25, **{"payorder no": None, "Txn Ref/ Seq No": None, "Value Date": None}),   # no key and no date: one error (the date)
     ]
     rows.append(None)                                                              # blank row: skipped silently
     # The same key twice with different values: both rows end up Invalid (a clash inside the file).
@@ -183,7 +183,7 @@ def f04_repeats_in_file() -> list:
 
 def f05_missing_header() -> tuple:
     rng = random.Random(505)
-    headers = [h for h in HEADERS if h != "payorder no"]
+    headers = [h for h in HEADERS if h != "Value Date"]    # the only required header
     return [valid_row("E", n, rng) for n in range(1, 11)], headers
 
 
@@ -280,11 +280,65 @@ def f10_query_demo() -> list:
     return rows
 
 
+def keyless_row(n: int, rng: random.Random, acct: str = "24327901860603") -> dict:
+    """A bank-statement row as in the real files: no pay order no / txn ref, no customer, narrations carry the identity.
+    Narration 1 holds an 8-digit slip number (sometimes with a letter prefix), Narration 3 a name, Narration 4 sometimes a
+    13-digit CNIC. All values are invented."""
+    slip = f"{rng.randint(10_000_000, 99_999_999)}"
+    names = ["MUHAMMAD HANIF", "UME KULSOOM", "SHAIDA BIBI", "KHALID HUSAIN", "RAHIM KHAN", "FARHAT JABEEN"]
+    return {
+        "Value Date": BASE_DATE + timedelta(days=n % 60),
+        "Br. Code": f"{rng.randint(100, 2999):04d}",
+        "Branch Name": "bahria town karachi",
+        "Credit": rng.choice([90_000, 150_000, 260_000, 450_000, 1_000_000]),
+        "Bank Name": "HBL RESD PLOT",
+        "Acct no": acct,
+        "Project": "RESIDENTIAL",
+        "Name of Data": "HBL BANK STATEMENT",
+        "Narraction 1": slip if n % 4 else f"R {slip}",
+        "Narration 2": f"BTKP NDP {rng.randint(1000, 9999)}",
+        "Narration 3": names[n % len(names)],
+        "Narration 4": f"35202{rng.randint(1_000_000, 9_999_999)}{rng.randint(1, 9)}" if n % 3 == 0 else None,
+        "Narration 5": "INSTALLMENT 7" if n % 5 == 0 else None,
+    }
+
+
+def f11_keyless_statement() -> list:
+    """100 statement rows without keys, 6 exact repeats of earlier rows (Repeated in file), and 3 keyed rows (a mixed file)."""
+    rng = random.Random(1111)
+    rows = [keyless_row(n, rng) for n in range(1, 101)]
+    rows += [dict(rows[n]) for n in (3, 10, 17, 24, 31, 38)]
+    rows += [valid_row("K", n, rng) for n in range(1, 4)]
+    return rows
+
+
+def f12_keyless_reimport_of_11() -> list:
+    """Meant for after file 11 is committed: 30 rows identical to file 11 (Already in database), 10 with Narration 2 changed (same
+    slip number, date, account and amount: Possible duplicates) and 10 new rows."""
+    rng = random.Random(1111)
+    base = [keyless_row(n, rng) for n in range(1, 101)]
+    rows = [dict(r) for r in base[:30]]
+    changed = [dict(r) for r in base[30:40]]
+    for r in changed:
+        r["Narration 2"] = "CHANGED " + (r["Narration 2"] or "")
+    rows += changed
+    rng2 = random.Random(1212)
+    rows += [keyless_row(200 + n, rng2) for n in range(10)]
+    return rows
+
+
 def main() -> None:
     OUT.mkdir(exist_ok=True)
-    only = set(sys.argv[1:])     # e.g. `python make_samples.py 10` writes just file 10 (the others stay byte-identical in git)
+    only = set(sys.argv[1:])     # e.g. `python make_samples.py 10 11` writes just those files (the others stay byte-identical in git)
     if not only or "10" in only:
         write("10_query_demo_3000_rows.xlsx", f10_query_demo())
+    if not only or "11" in only:
+        write("11_keyless_statement.xlsx", f11_keyless_statement())
+    if not only or "12" in only:
+        write("12_keyless_reimport_of_11.xlsx", f12_keyless_reimport_of_11())
+    if "05" in only:
+        rows, headers = f05_missing_header()
+        write("05_missing_required_header.xlsx", rows, headers=headers)
     if only:
         return
     write("01_perfect_all_new.xlsx", f01_perfect())

@@ -26,7 +26,7 @@ public abstract class StagingStoreBase : IStagingStore
 
     public abstract Task ClassifyAsync(int batchId, CancellationToken ct = default);
     public abstract Task<DiscardResult> DiscardAsync(int batchId, CancellationToken ct = default);
-    public abstract Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default);
+    public abstract Task<CommitResult> CommitAsync(int batchId, bool skipFlaggedDuplicates = false, CancellationToken ct = default);
     public abstract Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default);
     public abstract Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default);
 
@@ -111,7 +111,7 @@ public abstract class StagingStoreBase : IStagingStore
             .Where(t => orders.Contains(t.PayOrderNo))
             .ToListAsync(ct).ConfigureAwait(false);
         var byKey = existing.ToDictionary(
-            t => (t.PayOrderNo.ToUpperInvariant(), t.TxnRefSeqNo.ToUpperInvariant()), t => t);
+            t => (t.PayOrderNo!.ToUpperInvariant(), t.TxnRefSeqNo!.ToUpperInvariant()), t => t);
 
         var rows = page.Rows.Select(incoming =>
         {
@@ -132,6 +132,16 @@ public abstract class StagingStoreBase : IStagingStore
         var total = await conflicts.CountAsync(ct).ConfigureAwait(false);
         var overwrite = await conflicts.CountAsync(s => s.Overwrite, ct).ConfigureAwait(false);
         return new ConflictCounts(total, overwrite);
+    }
+
+    public async Task<int> GetFlaggedKeylessCountAsync(int batchId, CancellationToken ct = default)
+    {
+        await using var db = await Factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        return await db.ImportStagings.AsNoTracking()
+            .CountAsync(s => s.ImportBatchId == batchId
+                             && (s.Status == (byte)RowStatus.ExactDuplicate || s.Status == (byte)RowStatus.FileDuplicate
+                                 || s.Status == (byte)RowStatus.LikelyDuplicate)
+                             && (s.PayOrderNo == null || s.TxnRefSeqNo == null), ct).ConfigureAwait(false);
     }
 
     // ---- Invalid rows for the export, in keyset pages (WHERE ExcelRowNumber > last ORDER BY ExcelRowNumber) ----
@@ -229,6 +239,8 @@ public abstract class StagingStoreBase : IStagingStore
         Narration3 = s.Narration3,
         Narration4 = s.Narration4,
         Narration5 = s.Narration5,
+        SlipNo = s.SlipNo,
+        NarrationCnic = s.NarrationCnic,
     };
 
     private static StagedRow ToStagedRow(Transaction t) => new()
@@ -262,5 +274,7 @@ public abstract class StagingStoreBase : IStagingStore
         Narration3 = t.Narration3,
         Narration4 = t.Narration4,
         Narration5 = t.Narration5,
+        SlipNo = t.SlipNo,
+        NarrationCnic = t.NarrationCnic,
     };
 }

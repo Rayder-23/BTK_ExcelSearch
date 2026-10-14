@@ -65,6 +65,7 @@ public sealed partial class QueryViewModel : ObservableObject
         ApplicationNo = new TextFilterInput("Application no");
         PayOrderNo = new TextFilterInput("Pay order no");
         TxnRefSeqNo = new TextFilterInput("Txn ref / seq no");
+        SlipNo = new TextFilterInput("Slip no");
         RegNo = new TextFilterInput("Reg no");
         ChallanNo = new TextFilterInput("Challan no");
         ChequeInstNo = new TextFilterInput("Cheque / inst no");
@@ -94,6 +95,9 @@ public sealed partial class QueryViewModel : ObservableObject
     public TextFilterInput ApplicationNo { get; }
     public TextFilterInput PayOrderNo { get; }
     public TextFilterInput TxnRefSeqNo { get; }
+
+    /// <summary>The slip number found in Narration 1 when the file was imported.</summary>
+    public TextFilterInput SlipNo { get; }
     public TextFilterInput RegNo { get; }
     public TextFilterInput ChallanNo { get; }
     public TextFilterInput ChequeInstNo { get; }
@@ -156,20 +160,22 @@ public sealed partial class QueryViewModel : ObservableObject
     public IReadOnlyList<QueryColumn> Columns { get; } = new QueryColumn[]
     {
         new("Value date", nameof(TransactionRecord.ValueDate), TransactionColumn.ValueDate, ColumnKind.Mono, "dd/MM/yyyy", 108),
-        new("Pay order no", nameof(TransactionRecord.PayOrderNo), TransactionColumn.PayOrderNo, ColumnKind.Mono, null, 150),
-        new("Txn ref / seq", nameof(TransactionRecord.TxnRefSeqNo), TransactionColumn.TxnRefSeqNo, ColumnKind.Mono, null, 120),
+        new("Slip no", nameof(TransactionRecord.SlipNo), TransactionColumn.SlipNo, ColumnKind.Mono, null, 100),
+        // Bank statements have no pay order no / txn ref on most rows, so these two are hidden until ticked in the Columns picker.
+        new("Pay order no", nameof(TransactionRecord.PayOrderNo), TransactionColumn.PayOrderNo, ColumnKind.Mono, null, 150, false),
+        new("Txn ref / seq", nameof(TransactionRecord.TxnRefSeqNo), TransactionColumn.TxnRefSeqNo, ColumnKind.Mono, null, 120, false),
         new("Customer", nameof(TransactionRecord.CustomerName), TransactionColumn.CustomerName, ColumnKind.Text, null, 220),
         new("CNIC", nameof(TransactionRecord.Cnic), TransactionColumn.Cnic, ColumnKind.Mono, null, 130),
-        new("Application no", nameof(TransactionRecord.ApplicationNo), TransactionColumn.ApplicationNo, ColumnKind.Mono, null, 130),
+        new("Application no", nameof(TransactionRecord.ApplicationNo), TransactionColumn.ApplicationNo, ColumnKind.Mono, null, 130, false),
         new("Reg no", nameof(TransactionRecord.RegNo), TransactionColumn.RegNo, ColumnKind.Mono, null, 100, false),
         new("Bank", nameof(TransactionRecord.BankName), TransactionColumn.BankName, ColumnKind.Text, null, 150),
-        new("Account no", nameof(TransactionRecord.AccountNo), TransactionColumn.AccountNo, ColumnKind.Mono, null, 140, false),
+        new("Account no", nameof(TransactionRecord.AccountNo), TransactionColumn.AccountNo, ColumnKind.Mono, null, 140),
         new("Project", nameof(TransactionRecord.Project), TransactionColumn.Project, ColumnKind.Text, null, 140),
-        new("Dealer", nameof(TransactionRecord.DealerName), TransactionColumn.DealerName, ColumnKind.Text, null, 150),
+        new("Dealer", nameof(TransactionRecord.DealerName), TransactionColumn.DealerName, ColumnKind.Text, null, 150, false),
         new("Branch", nameof(TransactionRecord.BranchName), TransactionColumn.BranchName, ColumnKind.Text, null, 140, false),
         new("Debit", nameof(TransactionRecord.Debit), TransactionColumn.Debit, ColumnKind.Number, "N2", 118),
         new("Credit", nameof(TransactionRecord.Credit), TransactionColumn.Credit, ColumnKind.Number, "N2", 118),
-        new("Down payment", nameof(TransactionRecord.DownPaymentAmount), TransactionColumn.DownPaymentAmount, ColumnKind.Number, "N2", 128),
+        new("Down payment", nameof(TransactionRecord.DownPaymentAmount), TransactionColumn.DownPaymentAmount, ColumnKind.Number, "N2", 128, false),
         new("Challan no", nameof(TransactionRecord.ChallanNo), TransactionColumn.ChallanNo, ColumnKind.Mono, null, 110, false),
         new("Cheque / inst no", nameof(TransactionRecord.ChequeInstNo), TransactionColumn.ChequeInstNo, ColumnKind.Mono, null, 130, false),
         new("Data source", nameof(TransactionRecord.DataSource), TransactionColumn.DataSource, ColumnKind.Text, null, 130, false),
@@ -180,11 +186,12 @@ public sealed partial class QueryViewModel : ObservableObject
         new("Branch code", nameof(TransactionRecord.BranchCode), null, ColumnKind.Mono, null, 100, false),
         new("Plot no", nameof(TransactionRecord.PlotNo), null, ColumnKind.Mono, null, 90, false),
         new("Street no", nameof(TransactionRecord.StreetNo), null, ColumnKind.Mono, null, 90, false),
-        new("Narration 1", nameof(TransactionRecord.Narration1), null, ColumnKind.Text, null, 240, false),
-        new("Narration 2", nameof(TransactionRecord.Narration2), null, ColumnKind.Text, null, 240, false),
+        new("Narration 1", nameof(TransactionRecord.Narration1), null, ColumnKind.Text, null, 240),
+        new("Narration 2", nameof(TransactionRecord.Narration2), null, ColumnKind.Text, null, 240),
         new("Narration 3", nameof(TransactionRecord.Narration3), null, ColumnKind.Text, null, 240, false),
         new("Narration 4", nameof(TransactionRecord.Narration4), null, ColumnKind.Text, null, 240, false),
         new("Narration 5", nameof(TransactionRecord.Narration5), null, ColumnKind.Text, null, 240, false),
+        new("CNIC in narration", nameof(TransactionRecord.NarrationCnic), null, ColumnKind.Mono, null, 140, false),
     };
 
     /// <summary>Which columns are shown (the "Columns" picker). The defaults leave out the rarely needed ones.</summary>
@@ -284,7 +291,7 @@ public sealed partial class QueryViewModel : ObservableObject
         ValueDateTo = null;
         CustomerName = "";
         CustomerNameStartsWith = false;
-        foreach (var t in new[] { Cnic, ApplicationNo, PayOrderNo, TxnRefSeqNo, RegNo, ChallanNo, ChequeInstNo, AccountNo }) t.Clear();
+        foreach (var t in new[] { Cnic, ApplicationNo, PayOrderNo, TxnRefSeqNo, SlipNo, RegNo, ChallanNo, ChequeInstNo, AccountNo }) t.Clear();
         foreach (var m in new[] { Banks, Projects, Dealers, Branches, DataSources }) m.Clear();
         CreditMin = CreditMax = DebitMin = DebitMax = DownPaymentMin = DownPaymentMax = ImportBatchText = "";
         FilterError = null;
@@ -356,6 +363,7 @@ public sealed partial class QueryViewModel : ObservableObject
             RegNo = RegNo.Criterion,
             PayOrderNo = PayOrderNo.Criterion,
             TxnRefSeqNo = TxnRefSeqNo.Criterion,
+            SlipNo = SlipNo.Criterion,
             ChallanNo = ChallanNo.Criterion,
             ChequeInstNo = ChequeInstNo.Criterion,
             AccountNo = AccountNo.Criterion,
@@ -425,6 +433,7 @@ public sealed partial class QueryViewModel : ObservableObject
         Text(ApplicationNo, f.ApplicationNo);
         Text(PayOrderNo, f.PayOrderNo);
         Text(TxnRefSeqNo, f.TxnRefSeqNo);
+        Text(SlipNo, f.SlipNo);
         Text(RegNo, f.RegNo);
         Text(ChallanNo, f.ChallanNo);
         Text(ChequeInstNo, f.ChequeInstNo);
@@ -894,8 +903,9 @@ internal static class DetailSectionBuilder
         {
             new("Transaction", new DetailField[]
             {
-                new("Pay order no", r.PayOrderNo, true),
-                new("Txn ref / seq no", r.TxnRefSeqNo, true),
+                new("Pay order no", Text(r.PayOrderNo), true),
+                new("Txn ref / seq no", Text(r.TxnRefSeqNo), true),
+                new("Slip no", Text(r.SlipNo), true),
                 new("Value date", r.ValueDate.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture), true),
                 new("Data source", Text(r.DataSource)),
             }),
@@ -903,6 +913,7 @@ internal static class DetailSectionBuilder
             {
                 new("Name", Text(r.CustomerName)),
                 new("CNIC", Text(r.Cnic), true),
+                new("CNIC in narration", Text(r.NarrationCnic), true),
                 new("Application no", Text(r.ApplicationNo), true),
                 new("Reg no", Text(r.RegNo), true),
                 new("Plot no", Text(r.PlotNo), true),

@@ -5,11 +5,12 @@ public enum TransactionColumn
 {
     ValueDate, PayOrderNo, TxnRefSeqNo, CustomerName, Cnic, ApplicationNo, RegNo, ChallanNo, ChequeInstNo,
     BankName, AccountNo, Project, DealerName, BranchName, DataSource, Debit, Credit, DownPaymentAmount, RunningBalance,
+    SlipNo,
 }
 
 /// <summary>
-/// Sort order for a search. Ties are always broken by (PayOrderNo, TxnRefSeqNo) so paging is stable: the same row can
-/// never appear on two pages or be skipped, even when thousands of rows share a value.
+/// Sort order for a search. Ties are always broken by the row's Id so paging is stable: the same row can
+/// never appear on two pages or be skipped, even when thousands of rows share a value (or have no pay order number).
 /// </summary>
 public readonly record struct TransactionSort(TransactionColumn Column, bool Descending)
 {
@@ -17,13 +18,14 @@ public readonly record struct TransactionSort(TransactionColumn Column, bool Des
     public static TransactionSort Default { get; } = new(TransactionColumn.ValueDate, true);
 }
 
-/// <summary>A transaction's business key (the primary key of dbo.Transactions).</summary>
-public readonly record struct TransactionKey(string PayOrderNo, string TxnRefSeqNo);
+/// <summary>A transaction's identity: the surrogate Id (the primary key of dbo.Transactions). PayOrderNo / TxnRefSeqNo are optional data.</summary>
+public readonly record struct TransactionKey(Guid Id);
 
-/// <summary>One transaction with all 28 business fields (the two key columns plus 26 more).</summary>
+/// <summary>One transaction: its Id plus the 28 business fields and the two derived narration hints (SlipNo, NarrationCnic).</summary>
 public sealed record TransactionRecord(
-    string PayOrderNo,
-    string TxnRefSeqNo,
+    Guid Id,
+    string? PayOrderNo,
+    string? TxnRefSeqNo,
     DateOnly ValueDate,
     string? BranchCode,
     string? BranchName,
@@ -49,9 +51,11 @@ public sealed record TransactionRecord(
     string? Narration2,
     string? Narration3,
     string? Narration4,
-    string? Narration5)
+    string? Narration5,
+    string? SlipNo,
+    string? NarrationCnic)
 {
-    public TransactionKey Key => new(PayOrderNo, TxnRefSeqNo);
+    public TransactionKey Key => new(Id);
 }
 
 /// <summary>Where a transaction came from: the import batch and the row in the source file.</summary>

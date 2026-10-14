@@ -50,6 +50,8 @@ internal sealed class ImportRowDataReader : DbDataReader
         new("Narration3", typeof(string), (_, x) => x.Narration3),
         new("Narration4", typeof(string), (_, x) => x.Narration4),
         new("Narration5", typeof(string), (_, x) => x.Narration5),
+        new("SlipNo", typeof(string), (_, x) => x.SlipNo),
+        new("NarrationCnic", typeof(string), (_, x) => x.NarrationCnic),
     };
 
     private static readonly Dictionary<string, int> Ordinals =

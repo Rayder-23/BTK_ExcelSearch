@@ -124,3 +124,17 @@ public sealed class QueryLargeTests_Sqlite : QueryLargeContract, IClassFixture<S
     public QueryLargeTests_Sqlite(ITestOutputHelper output, SqliteDatabaseFixture db) : base(output) => _db = db;
     protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
 }
+
+[Trait("Category", "Integration")]
+public sealed class KeylessTests_SqlServer : KeylessContract
+{
+    public KeylessTests_SqlServer(ITestOutputHelper output) : base(output) { }
+    protected override StagingEnv NewEnv(bool large = false) => ContractEnv.SqlServer(large);
+}
+
+public sealed class KeylessTests_Sqlite : KeylessContract, IClassFixture<SqliteDatabaseFixture>
+{
+    private readonly SqliteDatabaseFixture _db;
+    public KeylessTests_Sqlite(ITestOutputHelper output, SqliteDatabaseFixture db) : base(output) => _db = db;
+    protected override StagingEnv NewEnv(bool large = false) => ContractEnv.Sqlite(_db, large);
+}

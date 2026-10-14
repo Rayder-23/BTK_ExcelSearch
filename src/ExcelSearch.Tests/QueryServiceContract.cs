@@ -314,24 +314,79 @@ public abstract class QueryServiceContract
         var covered = new[] { TransactionColumn.ValueDate, TransactionColumn.CustomerName, TransactionColumn.BankName,
                               TransactionColumn.Debit, TransactionColumn.Credit, TransactionColumn.RunningBalance };
 
+        var byId = seed.Rows.ToDictionary(r => r.Id);
+
         foreach (var (column, key) in keys.Where(k => covered.Contains(k.Key)))
             foreach (var descending in new[] { false, true })
             {
                 var sort = new TransactionSort(column, descending);
-                var ordered = descending ? seed.Rows.OrderByDescending(key) : seed.Rows.OrderBy(key);
-                // Ties break on the key in the same direction as the sort.
-                var expected = (descending
-                        ? ordered.ThenByDescending(r => r.PayOrderNo.ToUpperInvariant(), StringComparer.Ordinal).ThenByDescending(r => r.TxnRefSeqNo.ToUpperInvariant(), StringComparer.Ordinal)
-                        : ordered.ThenBy(r => r.PayOrderNo.ToUpperInvariant(), StringComparer.Ordinal).ThenBy(r => r.TxnRefSeqNo.ToUpperInvariant(), StringComparer.Ordinal))
-                    .Select(r => r.PayOrderNo).ToArray();
+                var expectedKeys = (descending ? seed.Rows.OrderByDescending(key) : seed.Rows.OrderBy(key)).Select(key).ToArray();
 
-                var got = new List<string>();
-                for (var page = 1; page <= 8; page++)
-                    got.AddRange((await svc.GetPageAsync(f, sort, page, 4)).Select(r => r.PayOrderNo));
+                // Ties break on the row's Id (the database's own GUID order), so only the sort KEYS are compared with the whole-result
+                // order; the pages must also never overlap, and asking twice must give the same rows in the same order.
+                async Task<List<Guid>> Pages()
+                {
+                    var ids = new List<Guid>();
+                    for (var page = 1; page <= 8; page++)
+                        ids.AddRange((await svc.GetPageAsync(f, sort, page, 4)).Select(r => r.Id));
+                    return ids;
+                }
+                var got = await Pages();
 
-                Assert.True(expected.SequenceEqual(got), $"{column} {(descending ? "descending" : "ascending")}: paged order differs from the whole-result order.");
+                Assert.True(expectedKeys.SequenceEqual(got.Select(id => key(byId[id]))), $"{column} {(descending ? "descending" : "ascending")}: paged order differs from the whole-result order.");
                 Assert.Equal(30, got.Distinct().Count());
+                Assert.True(got.SequenceEqual(await Pages()), $"{column} {(descending ? "descending" : "ascending")}: two reads gave a different order.");
             }
+    }
+
+    [SkippableFact]
+    public async Task Rows_without_a_pay_order_no_can_be_found_by_slip_and_cnic_paged_sorted_and_opened()
+    {
+        await using var env = NewEnv();
+        var batch = await env.NewBatchAsync();
+        var rows = Enumerable.Range(1, 12).Select(i => new Transaction
+        {
+            ImportBatchId = batch,
+            SourceRowNumber = i + 1,
+            RowHash = i.ToString("x").PadLeft(64, '0'),
+            ValueDate = new DateOnly(2024, 1, 1).AddDays(i / 4),
+            Credit = 100m * i,
+            AccountNo = env.Prefix,
+            Narration1 = $"slip {i}",
+            SlipNo = $"7{i:0000000}",
+            NarrationCnic = i % 3 == 0 ? $"3520{i:D9}" : null,
+        }).ToList();
+        await QuerySeed.InsertAsync(env, rows);
+        var svc = QuerySeed.Service(env);
+        var f = new TransactionFilter { ImportBatchId = batch };
+
+        // Paging works without any key: every row exactly once, none with a pay order no.
+        var seen = new List<TransactionRecord>();
+        for (var page = 1; page <= 3; page++) seen.AddRange(await svc.GetPageAsync(f, TransactionSort.Default, page, 5));
+        Assert.Equal(12, seen.Select(r => r.Id).Distinct().Count());
+        Assert.All(seen, r => { Assert.Null(r.PayOrderNo); Assert.Null(r.TxnRefSeqNo); });
+
+        // Slip number filter (exact) and sort by it.
+        var bySlip = await svc.GetPageAsync(f with { SlipNo = TextCriterion.Exact("70000005") }, TransactionSort.Default, 1, 10);
+        Assert.Equal(500m, Assert.Single(bySlip).Credit);
+        var slipDesc = await svc.GetPageAsync(f, new TransactionSort(TransactionColumn.SlipNo, true), 1, 3);
+        Assert.Equal(new[] { "70000012", "70000011", "70000010" }, slipDesc.Select(r => r.SlipNo));
+
+        // The CNIC filter also finds the CNIC found in the narrations (typed with dashes, stored as digits).
+        var byCnic = await svc.GetPageAsync(f with { Cnic = TextCriterion.Exact("35200-0000000-6") }, TransactionSort.Default, 1, 10);
+        Assert.Equal("70000006", Assert.Single(byCnic).SlipNo);
+        Assert.Equal(4, await svc.CountAsync(f with { Cnic = TextCriterion.StartsWith("3520") }));    // rows 3, 6, 9, 12
+
+        // The details open by Id and show the derived values.
+        var detail = await svc.GetDetailAsync(seen[0].Key);
+        Assert.NotNull(detail);
+        Assert.Equal(seen[0].SlipNo, detail!.Record.SlipNo);
+        Assert.Null(detail.Record.PayOrderNo);
+
+        // The export walks them all too.
+        var ids = new List<Guid>();
+        await foreach (var chunk in svc.StreamChunksAsync(f, 5)) ids.AddRange(chunk.Select(r => r.Id));
+        Assert.Equal(12, ids.Distinct().Count());
     }
 
     [SkippableFact]
@@ -462,10 +517,11 @@ public abstract class QueryServiceContract
         var svc = QuerySeed.Service(env);
         var src = seed.Rows[8];                                                        // i = 9
 
-        var detail = await svc.GetDetailAsync(new TransactionKey(src.PayOrderNo, src.TxnRefSeqNo));
+        var detail = await svc.GetDetailAsync(new TransactionKey(src.Id));
         Assert.NotNull(detail);
         var r = detail!.Record;
 
+        Assert.Equal(src.Id, r.Id);
         Assert.Equal(src.PayOrderNo, r.PayOrderNo);
         Assert.Equal(src.TxnRefSeqNo, r.TxnRefSeqNo);
         Assert.Equal(src.ValueDate, r.ValueDate);
@@ -494,6 +550,8 @@ public abstract class QueryServiceContract
         Assert.Equal(src.Narration3, r.Narration3);       // i = 9 is divisible by 3, so this one is set
         Assert.Equal(src.Narration4, r.Narration4);
         Assert.Equal(src.Narration5, r.Narration5);
+        Assert.Equal(src.SlipNo, r.SlipNo);
+        Assert.Equal(src.NarrationCnic, r.NarrationCnic);
         Assert.NotNull(r.Narration3);
 
         var import = detail.Import;
@@ -505,7 +563,7 @@ public abstract class QueryServiceContract
         Assert.True(import.ImportedAt > DateTime.UtcNow.AddDays(-1) && import.ImportedAt < DateTime.UtcNow.AddDays(1));
         Assert.Null(import.UpdatedAt);
 
-        Assert.Null(await svc.GetDetailAsync(new TransactionKey(env.Prefix + "-nope", "none")));
+        Assert.Null(await svc.GetDetailAsync(new TransactionKey(Guid.NewGuid())));
     }
 
     // ---- safety, cancellation, timeout -----------------------------------------------------------------
@@ -523,7 +581,7 @@ public abstract class QueryServiceContract
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => svc.GetPageAsync(f, TransactionSort.Default, 1, 10, cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => svc.CountAsync(f, cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => svc.GetTotalsAsync(f, cts.Token));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => svc.GetDetailAsync(new TransactionKey("a", "b"), cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => svc.GetDetailAsync(new TransactionKey(Guid.NewGuid()), cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => svc.ExportAsync(f, ExportFormat.Csv, Path.Combine(Path.GetTempPath(), "never.csv"), null, cts.Token));
     }
 
@@ -532,21 +590,22 @@ public abstract class QueryServiceContract
     // ---- export ----------------------------------------------------------------------------------------
 
     [SkippableFact]
-    public async Task Stream_chunks_walks_the_result_in_key_order_without_gaps_or_repeats()
+    public async Task Stream_chunks_walks_the_result_without_gaps_or_repeats()
     {
         await using var env = NewEnv();
         var seed = await QuerySeed.SeedStandardAsync(env);
         var svc = QuerySeed.Service(env);
 
         var sizes = new List<int>();
-        var keys = new List<string>();
+        var ids = new List<Guid>();
         await foreach (var chunk in svc.StreamChunksAsync(In(seed), 4))
         {
             sizes.Add(chunk.Count);
-            keys.AddRange(chunk.Select(r => r.PayOrderNo));
+            ids.AddRange(chunk.Select(r => r.Id));
         }
         Assert.Equal(new[] { 4, 4, 4, 4, 4, 4, 4, 2 }, sizes);
-        Assert.Equal(seed.Rows.Select(r => r.PayOrderNo).OrderBy(x => x, StringComparer.OrdinalIgnoreCase), keys);
+        // Id order is the database's own order for GUIDs (not .NET's), so check every row came exactly once.
+        Assert.Equal(seed.Rows.Select(r => r.Id).OrderBy(x => x), ids.OrderBy(x => x));
 
         // A filtered stream, and a stream that ends exactly on a chunk boundary (no empty trailing chunk is yielded).
         var filtered = new List<int>();
@@ -565,7 +624,7 @@ public abstract class QueryServiceContract
         try
         {
             var filter = In(seed) with { BankNames = new[] { $"{env.Prefix} HBL" } };
-            var expected = seed.Rows.Where(r => r.BankName == $"{env.Prefix} HBL").OrderBy(r => r.PayOrderNo, StringComparer.OrdinalIgnoreCase).ToList();
+            var expected = seed.Rows.Where(r => r.BankName == $"{env.Prefix} HBL").ToList();
 
             var reported = new List<long>();
             var result = await svc.ExportAsync(filter, ExportFormat.Xlsx, path, new Progress<long>(reported.Add));
@@ -579,15 +638,23 @@ public abstract class QueryServiceContract
             var ws = wb.Worksheet(1);
             Assert.Equal("Pay Order No", ws.Cell(1, 1).GetString());
             Assert.Equal("Narration 5", ws.Cell(1, 28).GetString());
+            Assert.Equal("Slip No", ws.Cell(1, 29).GetString());
+            Assert.Equal("Narration CNIC", ws.Cell(1, 30).GetString());
             Assert.Equal(expected.Count + 1, ws.LastRowUsed()!.RowNumber());
 
+            // Rows come out in Id order, so find each row by its pay order no instead of by position.
+            var rowOf = Enumerable.Range(2, expected.Count).ToDictionary(n => ws.Cell(n, 1).GetString());
+            Assert.Equal(expected.Select(r => r.PayOrderNo!).OrderBy(x => x), rowOf.Keys.OrderBy(x => x));
+
             var first = expected[0];
-            Assert.Equal(first.PayOrderNo, ws.Cell(2, 1).GetString());
-            Assert.Equal(first.ValueDate.ToDateTime(TimeOnly.MinValue), ws.Cell(2, 3).GetDateTime());
-            Assert.Equal(first.CustomerName, ws.Cell(2, 12).GetString());
-            Assert.Equal(first.Cnic, ws.Cell(2, 13).GetString());                      // stays text
-            Assert.Equal((double)first.Debit!.Value, ws.Cell(2, 16).GetDouble());      // stays a number
-            Assert.Equal(first.Credit is null, ws.Cell(2, 17).IsEmpty());
+            var n0 = rowOf[first.PayOrderNo!];
+            Assert.Equal(first.ValueDate.ToDateTime(TimeOnly.MinValue), ws.Cell(n0, 3).GetDateTime());
+            Assert.Equal(first.CustomerName, ws.Cell(n0, 12).GetString());
+            Assert.Equal(first.Cnic, ws.Cell(n0, 13).GetString());                      // stays text
+            Assert.Equal((double)first.Debit!.Value, ws.Cell(n0, 16).GetDouble());      // stays a number
+            Assert.Equal(first.Credit is null, ws.Cell(n0, 17).IsEmpty());
+            Assert.Equal(first.SlipNo, ws.Cell(n0, 29).GetString());
+            Assert.Equal(first.NarrationCnic ?? "", ws.Cell(n0, 30).GetString());
         }
         finally
         {
@@ -614,7 +681,7 @@ public abstract class QueryServiceContract
             var records = ParseCsv(System.Text.Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3));
 
             Assert.Equal(31, records.Count);
-            Assert.All(records, rec => Assert.Equal(28, rec.Count));                    // quoting kept every record at 28 fields
+            Assert.All(records, rec => Assert.Equal(30, rec.Count));                    // quoting kept every record at 30 fields
             Assert.Equal("Pay Order No", records[0][0]);
 
             var awkward = records.Single(r => r[0] == seed.Rows[7].PayOrderNo);          // i = 8: comma, quotes, line break
@@ -708,7 +775,7 @@ public abstract class QueryServiceContract
         try
         {
             var filter = In(seed) with { CustomerName = "khan" };
-            var expected = seed.Rows.Where(r => r.CustomerName!.Contains("khan", Ci)).OrderBy(r => r.PayOrderNo, StringComparer.OrdinalIgnoreCase).ToList();
+            var expected = seed.Rows.Where(r => r.CustomerName!.Contains("khan", Ci)).ToList();
 
             var result = await svc.ExportAsync(filter, ExportFormat.Xlsx, path, null, default, new[] { "PayOrderNo", "CustomerName", "Credit" });
 
@@ -718,7 +785,8 @@ public abstract class QueryServiceContract
             var ws = wb.Worksheet(1);
             Assert.Equal(3, ws.LastColumnUsed()!.ColumnNumber());
             Assert.Equal(expected.Count + 1, ws.LastRowUsed()!.RowNumber());
-            Assert.Equal(expected[0].PayOrderNo, ws.Cell(2, 1).GetString());
+            Assert.Equal(expected.Select(r => r.PayOrderNo!).OrderBy(x => x),
+                Enumerable.Range(2, expected.Count).Select(n => ws.Cell(n, 1).GetString()).OrderBy(x => x));
 
             await Assert.ThrowsAsync<ArgumentException>(() => svc.ExportAsync(filter, ExportFormat.Xlsx, path, null, default, new string[0]));
             await Assert.ThrowsAsync<ArgumentException>(() => svc.ExportAsync(filter, ExportFormat.Csv, path + ".csv", null, default, new[] { "Nope" }));

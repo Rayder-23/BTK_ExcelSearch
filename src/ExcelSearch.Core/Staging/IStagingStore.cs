@@ -42,6 +42,8 @@ public sealed class StagedRow
     public string? Narration3 { get; init; }
     public string? Narration4 { get; init; }
     public string? Narration5 { get; init; }
+    public string? SlipNo { get; init; }
+    public string? NarrationCnic { get; init; }
 }
 
 /// <summary>One page of staged rows plus the total number of rows with that status.</summary>
@@ -97,8 +99,11 @@ public interface IStagingStore : IInvalidRowSource
     /// <summary>
     /// Writes the batch into Transactions in one transaction, under an exclusive application lock so two
     /// commits never run at once. Expected failures are returned in the result, not thrown.
+    /// Key-less rows flagged as duplicates (Already in database, Repeated in file, Possible duplicate) are
+    /// imported too, unless <paramref name="skipFlaggedDuplicates"/> is true. Rows with a full key that
+    /// duplicate something are always skipped.
     /// </summary>
-    Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default);
+    Task<CommitResult> CommitAsync(int batchId, bool skipFlaggedDuplicates = false, CancellationToken ct = default);
 
     /// <summary>
     /// Housekeeping: discards 'Staged' batches older than 24 hours, and deletes leftover staging rows of
@@ -114,6 +119,12 @@ public interface IStagingStore : IInvalidRowSource
 
     /// <summary>How many Conflict rows the batch has and how many are set to overwrite, read from the database.</summary>
     Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default);
+
+    /// <summary>
+    /// How many rows without a full key are flagged as duplicates (Already in database, Repeated in file, Possible duplicate):
+    /// the rows a commit imports unless the user chooses to skip flagged duplicates.
+    /// </summary>
+    Task<int> GetFlaggedKeylessCountAsync(int batchId, CancellationToken ct = default);
 
     /// <summary>
     /// Re-compares the batch's New, Already-in-database and Conflict rows with Transactions as it is now (other users may have

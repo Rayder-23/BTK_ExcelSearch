@@ -346,6 +346,34 @@ public sealed class StagingEnv : IAsyncDisposable
         return row;
     }
 
+    /// <summary>
+    /// A valid statement row with NO pay order no / txn ref, identified by its slip number. <paramref name="account"/> should carry
+    /// the test's prefix so the row can never equal anything outside the test; <paramref name="narration2"/> is what makes two rows
+    /// with the same slip, date, account and amount differ.
+    /// </summary>
+    public static ImportRow KeylessRow(int excelRow, string account, string slip, decimal credit, string narration2 = "n2")
+    {
+        var row = new ImportRow
+        {
+            ExcelRowNumber = excelRow,
+            ValueDate = new DateTime(2024, 4, 3),
+            Credit = credit,
+            AccountNo = account,
+            Narration1 = slip,
+            Narration2 = narration2,
+            SlipNo = slip,
+        };
+        row.RowHash = RowHasher.Compute(row);
+        return row;
+    }
+
+    /// <summary>Removes the Transactions rows a batch committed (simulates another user deleting them).</summary>
+    public async Task DeleteTransactionsOfBatchAsync(int batchId)
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        await db.Transactions.Where(t => t.ImportBatchId == batchId).ExecuteDeleteAsync();
+    }
+
     /// <summary>Stage in-memory rows exactly as the preview service would: load, then classify.</summary>
     public async Task<int> StageAsync(IEnumerable<ImportRow> rows)
     {
@@ -363,21 +391,48 @@ public sealed class StagingEnv : IAsyncDisposable
             lock (_lock) ids = _batches.ToArray();
             if (ids.Length == 0) return;
 
-            await using var db = await Factory.CreateDbContextAsync();
-            db.Database.SetCommandTimeout(600);
-
-            // 1. staging rows of this test's batches
-            foreach (var id in ids) await Ops.DeleteStagingAsync(db, id);
-
-            // 2. Transactions rows whose keys carry this test's unique prefix
-            await Ops.DeleteTransactionsWithPrefixAsync(db, Prefix);
-
-            // 3. the batches themselves
-            await db.ImportBatches.Where(b => ids.Contains(b.Id)).ExecuteDeleteAsync();
+            // Parallel tests delete big sets at the same moment on one SQL Server database; a deadlock victim just tries again.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    await CleanUpAsync(ids);
+                    return;
+                }
+                catch (Exception ex) when (attempt < 4 && IsDeadlock(ex))
+                {
+                    await Task.Delay(500 * attempt);
+                }
+            }
         }
         finally
         {
             await _services.DisposeAsync();
         }
+    }
+
+    private static bool IsDeadlock(Exception? ex)
+    {
+        for (; ex is not null; ex = ex.InnerException)
+            if (ex is Microsoft.Data.SqlClient.SqlException { Number: 1205 }) return true;
+        return false;
+    }
+
+    private async Task CleanUpAsync(int[] ids)
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        db.Database.SetCommandTimeout(600);
+
+        // 1. staging rows of this test's batches
+        foreach (var id in ids) await Ops.DeleteStagingAsync(db, id);
+
+        // 2. Transactions rows whose keys carry this test's unique prefix
+        await Ops.DeleteTransactionsWithPrefixAsync(db, Prefix);
+
+        // 2b. rows without a key (they have no prefix): the ones this test's own batches wrote
+        await db.Transactions.Where(t => ids.Contains(t.ImportBatchId)).ExecuteDeleteAsync();
+
+        // 3. the batches themselves
+        await db.ImportBatches.Where(b => ids.Contains(b.Id)).ExecuteDeleteAsync();
     }
 }

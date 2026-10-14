@@ -42,15 +42,15 @@ public interface ITransactionQueryService
     /// <summary>Forgets the cached dropdown values so the next call re-reads them (call after an import commits).</summary>
     void InvalidateDistinctValues();
 
-    /// <summary>One transaction with all its fields and where it was imported from; null if the key does not exist.</summary>
+    /// <summary>One transaction with all its fields and where it was imported from; null if no transaction has this Id.</summary>
     Task<TransactionDetail?> GetDetailAsync(TransactionKey key, CancellationToken ct = default);
 
     /// <summary>
-    /// Writes every row that matches the filter to a file, reading the database in key-ordered chunks of 10,000 so memory
+    /// Writes every row that matches the filter to a file, reading the database in Id-ordered chunks of 10,000 so memory
     /// stays flat however many rows there are. Xlsx is refused above <see cref="QueryLimits.MaxExcelDataRows"/> rows.
-    /// <paramref name="columns"/> are TransactionRecord property names in the order to write them (null = all 28); a name that is
+    /// <paramref name="columns"/> are TransactionRecord property names in the order to write them (null = all 30); a name that is
     /// not one of the 28 is rejected. The file is written next to the destination as ".part" and renamed when complete, so a cancelled or failed
-    /// export never leaves a half-written file. Rows are in primary-key order (PayOrderNo, TxnRefSeqNo).
+    /// export never leaves a half-written file. Rows are in Id order.
     /// </summary>
     Task<QueryExportResult> ExportAsync(TransactionFilter filter, ExportFormat format, string destinationPath,
         IProgress<long>? progress = null, CancellationToken ct = default, IReadOnlyList<string>? columns = null);

@@ -68,7 +68,8 @@ public sealed class ImportPreviewService : IImportPreviewService
         CancellationToken ct = default) => _store.SetConflictOverwriteAsync(batchId, overwrite, excelRowNumbers, ct);
 
     /// <summary>Commits a staged batch into Transactions.</summary>
-    public Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default) => _store.CommitAsync(batchId, ct);
+    public Task<CommitResult> CommitAsync(int batchId, bool skipFlaggedDuplicates = false, CancellationToken ct = default) =>
+        _store.CommitAsync(batchId, skipFlaggedDuplicates, ct);
 
     /// <summary>Discards a staged batch; refused (not thrown) if it was already committed or discarded.</summary>
     public Task<DiscardResult> DiscardAsync(int batchId, CancellationToken ct = default) => _store.DiscardAsync(batchId, ct);
@@ -84,6 +85,9 @@ public sealed class ImportPreviewService : IImportPreviewService
 
     public Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default) =>
         _store.GetConflictCountsAsync(batchId, ct);
+
+    public Task<int> GetFlaggedKeylessCountAsync(int batchId, CancellationToken ct = default) =>
+        _store.GetFlaggedKeylessCountAsync(batchId, ct);
 
     public Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default) =>
         _store.RefreshAgainstDatabaseAsync(batchId, ct);

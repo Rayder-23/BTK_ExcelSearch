@@ -75,5 +75,9 @@ public partial class ImportStaging
 
     public string? ExistingRowHash { get; set; }
 
+    public string? SlipNo { get; set; }
+
+    public string? NarrationCnic { get; set; }
+
     public virtual ImportBatch ImportBatch { get; set; } = null!;
 }

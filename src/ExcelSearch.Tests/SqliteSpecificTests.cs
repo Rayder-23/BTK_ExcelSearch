@@ -282,6 +282,50 @@ public class SqliteSpecificTests : IClassFixture<SqliteDatabaseFixture>
 
     // ---- the schema initializer -----------------------------------------------------------------------------------
 
+    [Fact]
+    public void Upgrading_a_version_1_database_keeps_its_rows_and_lets_rows_without_a_key_in()
+    {
+        var path = TempDbPath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            string v1;
+            using (var s = typeof(SqliteSchemaInitializer).Assembly.GetManifestResourceStream("ExcelSearch.Sqlite.001_create_schema.sql")!)
+            using (var reader = new StreamReader(s)) v1 = reader.ReadToEnd();
+
+            using (var c = new SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                c.Open();
+                Exec(c, v1);                                                     // a database as the first release made it
+                Exec(c, "INSERT INTO ImportBatches (FileName, FileHash) VALUES ('old.xlsx', 'h')");
+                Exec(c, "INSERT INTO Transactions (PayOrderNo, TxnRefSeqNo, ImportBatchId, RowHash, ValueDate, Credit) VALUES ('PO-1', 'T1', 1, 'x', '2024-01-01', 12550)");
+                Assert.Equal(1L, (long)Scalar(c, "PRAGMA user_version")!);
+            }
+
+            Assert.Equal(1, SqliteSchemaInitializer.Initialize(path));           // it returns the version it found
+            Assert.Equal(SqliteSchemaInitializer.LatestVersion, UserVersion(path));
+
+            using (var c = new SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                c.Open();
+                Assert.Equal("PO-1", (string)Scalar(c, "SELECT PayOrderNo FROM Transactions")!);   // the old row kept its key and its money
+                Assert.Equal(12550L, (long)Scalar(c, "SELECT Credit FROM Transactions")!);
+                Assert.Equal(36, ((string)Scalar(c, "SELECT Id FROM Transactions")!).Length);       // and has an Id
+
+                // Rows without a key: any number of them, even identical.
+                for (var i = 0; i < 2; i++)
+                    Exec(c, "INSERT INTO Transactions (ImportBatchId, RowHash, ValueDate, SlipNo) VALUES (1, 'same', '2024-01-02', '12345678')");
+                Assert.Equal(2L, (long)Scalar(c, "SELECT COUNT(*) FROM Transactions WHERE PayOrderNo IS NULL")!);
+
+                // A full key is still unique, ignoring case.
+                var ex = Assert.Throws<SqliteException>(() =>
+                    Exec(c, "INSERT INTO Transactions (PayOrderNo, TxnRefSeqNo, ImportBatchId, RowHash, ValueDate) VALUES ('po-1', 't1', 1, 'y', '2024-01-01')"));
+                Assert.Equal(19, ex.SqliteErrorCode);                            // SQLITE_CONSTRAINT
+            }
+        }
+        finally { Cleanup(path); }
+    }
+
     private static string TempDbPath() => Path.Combine(Path.GetTempPath(), $"excelsearch-init-{Guid.NewGuid():N}", "nested", "x.db");
 
     private static void Cleanup(string path)
@@ -334,7 +378,7 @@ public class SqliteSpecificTests : IClassFixture<SqliteDatabaseFixture>
                 while (r.Read()) tables.Add(r.GetString(0));
             }
             Assert.Equal(new[] { "ImportBatches", "ImportStaging", "Transactions" }, tables);
-            Assert.Equal(14L, (long)Scalar(c, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'IX_%'")!);   // 2 batches + 10 transactions + 2 staging
+            Assert.Equal(18L, (long)Scalar(c, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'IX_%'")!);   // 2 batches + 14 transactions + 2 staging (UX_Transactions_Key is the unique one)
         }
         finally { Cleanup(path); }
     }

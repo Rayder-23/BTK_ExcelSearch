@@ -96,6 +96,27 @@ public partial class ImportViewModel : ObservableObject
 
     [ObservableProperty] private int _exactDuplicateCount;
     [ObservableProperty] private int _fileDuplicateCount;
+    [ObservableProperty] private int _likelyDuplicateCount;
+
+    /// <summary>
+    /// Rows without a pay order no + txn ref that are flagged as duplicates (Already in database, Repeated in file, Possible duplicate).
+    /// A commit imports them unless <see cref="SkipFlaggedDuplicates"/> is ticked. Always the database's number.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CommitButtonText), nameof(HasFlagged))]
+    [NotifyCanExecuteChangedFor(nameof(CommitCommand))]
+    private int _flaggedImportCount;
+
+    public bool HasFlagged => FlaggedImportCount > 0;
+
+    /// <summary>The user's choice: leave the flagged duplicates out. Off by default (they are imported).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CommitButtonText))]
+    [NotifyCanExecuteChangedFor(nameof(CommitCommand))]
+    private bool _skipFlaggedDuplicates;
+
+    /// <summary>The flagged rows the next commit would import.</summary>
+    private int FlaggedToImport => SkipFlaggedDuplicates ? 0 : FlaggedImportCount;
 
     /// <summary>How many conflicts are set to overwrite. Always the database's number, never counted from the visible page.</summary>
     [ObservableProperty]
@@ -103,9 +124,16 @@ public partial class ImportViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(CommitCommand))]
     private int _overwriteCount;
 
-    public string CommitButtonText => OverwriteCount > 0
-        ? $"Import {NewCount:N0} new, update {OverwriteCount:N0}"
-        : $"Import {NewCount:N0} new rows";
+    public string CommitButtonText
+    {
+        get
+        {
+            var flagged = FlaggedToImport > 0 ? $" (+{FlaggedToImport:N0} flagged duplicates)" : "";
+            return OverwriteCount > 0
+                ? $"Import {NewCount:N0} new{flagged}, update {OverwriteCount:N0}"
+                : $"Import {NewCount:N0} new rows{flagged}";
+        }
+    }
 
     [ObservableProperty] private CommitResult? _lastCommit;
 
@@ -190,6 +218,7 @@ public partial class ImportViewModel : ObservableObject
         State = ImportState.Preview;
         SelectedTab = Tabs[0];   // triggers the first page load
         await LoadOverwriteCountAsync(id);
+        await LoadFlaggedCountAsync(id);
     }
 
     private void ApplyCounts(IReadOnlyDictionary<RowStatus, int> counts)
@@ -200,9 +229,10 @@ public partial class ImportViewModel : ObservableObject
         InvalidCount = Count(RowStatus.Invalid);
         ExactDuplicateCount = Count(RowStatus.ExactDuplicate);
         FileDuplicateCount = Count(RowStatus.FileDuplicate);
+        LikelyDuplicateCount = Count(RowStatus.LikelyDuplicate);
     }
 
-    /// <summary>Creates the five tabs; <paramref name="select"/> keeps the user on the tab they were looking at.</summary>
+    /// <summary>Creates the six tabs; <paramref name="select"/> keeps the user on the tab they were looking at.</summary>
     private void BuildTabs(int id, RowStatus? select)
     {
         Tabs.Clear();
@@ -211,6 +241,7 @@ public partial class ImportViewModel : ObservableObject
         Tabs.Add(NewTab(id, RowStatus.Invalid, "Invalid", InvalidCount));
         Tabs.Add(NewTab(id, RowStatus.ExactDuplicate, "Already in database", ExactDuplicateCount));
         Tabs.Add(NewTab(id, RowStatus.FileDuplicate, "Repeated in file", FileDuplicateCount));
+        Tabs.Add(NewTab(id, RowStatus.LikelyDuplicate, "Possible duplicates", LikelyDuplicateCount));
         if (select is { } s) SelectedTab = Tabs.First(t => t.Status == s);
     }
 
@@ -223,6 +254,19 @@ public partial class ImportViewModel : ObservableObject
         try
         {
             OverwriteCount = (await _service.GetConflictCountsAsync(id)).Overwrite;
+        }
+        catch (Exception ex)
+        {
+            HandleError(ex);
+        }
+    }
+
+    /// <summary>Reads "how many flagged key-less rows would be imported" from the database.</summary>
+    private async Task LoadFlaggedCountAsync(int id)
+    {
+        try
+        {
+            FlaggedImportCount = await _service.GetFlaggedKeylessCountAsync(id);
         }
         catch (Exception ex)
         {
@@ -258,6 +302,7 @@ public partial class ImportViewModel : ObservableObject
             ApplyCounts(counts);
             BuildTabs(id, SelectedTab?.Status ?? RowStatus.New);
             await LoadOverwriteCountAsync(id);
+            await LoadFlaggedCountAsync(id);
             Message = result.Describe();
         }
         catch (Exception ex)
@@ -273,7 +318,7 @@ public partial class ImportViewModel : ObservableObject
     // ---- commit ------------------------------------------------------------------------------------------
 
     private bool CanCommit() =>
-        State == ImportState.Preview && BatchId is not null && (NewCount > 0 || OverwriteCount > 0) && !IsBusy && !IsExporting;
+        State == ImportState.Preview && BatchId is not null && (NewCount > 0 || OverwriteCount > 0 || FlaggedToImport > 0) && !IsBusy && !IsExporting;
 
     [RelayCommand(CanExecute = nameof(CanCommit))]
     private async Task CommitAsync()
@@ -281,11 +326,15 @@ public partial class ImportViewModel : ObservableObject
         if (BatchId is not { } id) return;
 
         var overwrite = OverwriteCount;
-        var skip = (ConflictCount - overwrite) + ExactDuplicateCount + FileDuplicateCount;
+        var flaggedImported = FlaggedToImport;
+        var flaggedTotal = ExactDuplicateCount + FileDuplicateCount + LikelyDuplicateCount;
+        // Rows with a pay order no + txn ref that duplicate something are always skipped; flagged key-less rows only when asked.
+        var skip = (ConflictCount - overwrite) + (flaggedTotal - flaggedImported);
         var summary = "This will:\n" +
                       $"• insert {NewCount:N0} new rows\n" +
+                      (flaggedImported > 0 ? $"• insert {flaggedImported:N0} more rows that are flagged as possible duplicates\n" : "") +
                       $"• overwrite {overwrite:N0} existing rows with the values in the file\n" +
-                      $"• skip {skip:N0} rows (conflicts you did not choose to overwrite, rows already in the database, and repeats within the file)\n" +
+                      $"• skip {skip:N0} rows (conflicts you did not choose to overwrite, and duplicates that are skipped)\n" +
                       $"• not import {InvalidCount:N0} invalid rows\n\nContinue?";
         if (!_dialogs.Confirm("Import", summary)) return;
 
@@ -294,7 +343,8 @@ public partial class ImportViewModel : ObservableObject
         try
         {
             // The overwrite choices are already saved in staging, so CommitAsync applies them.
-            var result = await Task.Run(() => _service.CommitAsync(id));
+            var skipFlagged = SkipFlaggedDuplicates;
+            var result = await Task.Run(() => _service.CommitAsync(id, skipFlagged));
 
             if (result.Success)
             {

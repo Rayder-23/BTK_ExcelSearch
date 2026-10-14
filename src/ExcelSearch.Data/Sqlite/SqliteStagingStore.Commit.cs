@@ -21,7 +21,7 @@ public sealed partial class SqliteStagingStore
         "ValueDate", "BranchCode", "BranchName", "RegNo", "ApplicationNo", "PlotNo", "StreetNo", "ChallanNo",
         "ChequeInstNo", "CustomerName", "Cnic", "Discount", "DownPaymentAmount", "Debit", "Credit",
         "RunningBalance", "BankName", "AccountNo", "Project", "DealerName", "DataSource",
-        "Narration1", "Narration2", "Narration3", "Narration4", "Narration5",
+        "Narration1", "Narration2", "Narration3", "Narration4", "Narration5", "SlipNo", "NarrationCnic",
     };
 
     // Id and CreatedAt are left out on purpose: the column defaults (a random GUID, "now") fill them, as on SQL Server.
@@ -30,7 +30,10 @@ public sealed partial class SqliteStagingStore
         string.Join(", ", BusinessColumns) + ") " +
         "SELECT s.PayOrderNo, s.TxnRefSeqNo, s.ImportBatchId, s.ExcelRowNumber, s.RowHash, " +
         string.Join(", ", BusinessColumns.Select(c => "s." + c)) + " " +
-        "FROM ImportStaging AS s WHERE s.ImportBatchId = $b AND s.Status = 2;";
+        // New rows, plus (unless the user chose to skip them; $skip is replaced by 1 or 0) flagged key-less rows:
+        // already in the database, repeated in the file, possible duplicate.
+        "FROM ImportStaging AS s WHERE s.ImportBatchId = $b AND (s.Status = 2 OR " +
+        "($skip = 0 AND s.Status IN (3, 4, 6) AND " + SqliteStatusSql.KeyLess + "));";
 
     // UPDATE ... FROM (SQLite 3.33+): in SET the target columns are unqualified; the join is in WHERE.
     private static readonly string UpdateSql =
@@ -47,7 +50,7 @@ public sealed partial class SqliteStagingStore
             ? _options.CommitLockTimeoutSeconds
             : StagingStoreOptions.DefaultCommitLockTimeoutSeconds;
 
-    public override async Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default)
+    public override async Task<CommitResult> CommitAsync(int batchId, bool skipFlaggedDuplicates = false, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
         CommitResult Fail(CommitFailure reason, string message) =>
@@ -118,6 +121,8 @@ public sealed partial class SqliteStagingStore
                     return Fail(CommitFailure.IncompleteLoad, $"Batch {batchId} still has {pending:N0} unclassified (Pending) rows.");
 
                 // c. Re-check against Transactions as it is NOW (others may have committed since the preview).
+                //    (These three checks join on the key, so they only ever see rows that have a full key; a key-less row
+                //    cannot collide with anything, it is at worst a duplicate, which is allowed.)
                 //    (i) a New row whose key now exists with the same hash is simply an exact duplicate.
                 await NonQuery("""
                     UPDATE ImportStaging SET Status = 3
@@ -143,7 +148,7 @@ public sealed partial class SqliteStagingStore
                     SELECT COUNT(*) FROM ImportStaging AS s
                     LEFT JOIN Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo
                     WHERE s.ImportBatchId = $b AND s.Status = 5 AND s.Overwrite = 1
-                      AND (t.PayOrderNo IS NULL OR t.RowHash <> s.ExistingRowHash);
+                      AND (t.Id IS NULL OR t.RowHash <> s.ExistingRowHash);
                     """);
                 if (changedConflicts > 0)
                     return Fail(CommitFailure.RowsChangedSincePreview,
@@ -151,33 +156,41 @@ public sealed partial class SqliteStagingStore
                         "Nothing was written. Discard this batch and import the file again.");
 
                 // Final tallies (step c(i) may have turned some New rows into exact duplicates).
-                int newRows = 0, exact = 0, fileDup = 0, invalid = 0, overwritable = 0, skippedConflicts = 0;
+                int newRows = 0, exact = 0, fileDup = 0, likely = 0, invalid = 0, overwritable = 0, skippedConflicts = 0;
+                int exactKeyless = 0, fileDupKeyless = 0, likelyKeyless = 0; // the key-less part of each: these are importable
                 await using (var cmd = Cmd(conn, """
-                    SELECT Status, COUNT(*), SUM(CASE WHEN Overwrite = 1 THEN 1 ELSE 0 END)
+                    SELECT Status, COUNT(*), SUM(CASE WHEN Overwrite = 1 THEN 1 ELSE 0 END),
+                           SUM(CASE WHEN PayOrderNo IS NULL OR TxnRefSeqNo IS NULL THEN 1 ELSE 0 END)
                     FROM ImportStaging WHERE ImportBatchId = $b GROUP BY Status
                     """, batchId))
                 await using (var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
                 {
                     while (await r.ReadAsync(ct).ConfigureAwait(false))
                     {
-                        int n = r.GetInt32(1), ow = r.GetInt32(2);
+                        int n = r.GetInt32(1), ow = r.GetInt32(2), keyless = r.GetInt32(3);
                         switch ((RowStatus)r.GetInt32(0))
                         {
                             case RowStatus.Invalid: invalid = n; break;
                             case RowStatus.New: newRows = n; break;
-                            case RowStatus.ExactDuplicate: exact = n; break;
-                            case RowStatus.FileDuplicate: fileDup = n; break;
+                            case RowStatus.ExactDuplicate: exact = n; exactKeyless = keyless; break;
+                            case RowStatus.FileDuplicate: fileDup = n; fileDupKeyless = keyless; break;
+                            case RowStatus.LikelyDuplicate: likely = n; likelyKeyless = keyless; break;
                             case RowStatus.Conflict: overwritable = ow; skippedConflicts = n - ow; break;
                         }
                     }
                 }
+                // Flagged key-less rows are imported unless the user asked to skip them.
+                int importedExact = skipFlaggedDuplicates ? 0 : exactKeyless;
+                int importedFile = skipFlaggedDuplicates ? 0 : fileDupKeyless;
+                int importedLikely = skipFlaggedDuplicates ? 0 : likelyKeyless;
+                int flagged = importedExact + importedFile + importedLikely;
 
                 // d. + e. The writes. Keys cannot collide: every New key was verified absent above, under the write lock.
-                var inserted = await NonQuery(InsertSql);
+                var inserted = await NonQuery(InsertSql.Replace("$skip", skipFlaggedDuplicates ? "1" : "0"));
                 var updated = await NonQuery(UpdateSql);
-                if (inserted != newRows || updated != overwritable)
+                if (inserted != newRows + flagged || updated != overwritable)
                     throw new InvalidOperationException(
-                        $"Commit of batch {batchId} wrote {inserted} inserts/{updated} updates but expected {newRows}/{overwritable}; rolled back.");
+                        $"Commit of batch {batchId} wrote {inserted} inserts/{updated} updates but expected {newRows + flagged}/{overwritable}; rolled back.");
 
                 // f. Counters and status, in the same transaction.
                 await using (var cmd = Cmd(conn, $"""
@@ -189,7 +202,7 @@ public sealed partial class SqliteStagingStore
                 {
                     cmd.Parameters.AddWithValue("$new", inserted);
                     cmd.Parameters.AddWithValue("$upd", updated);
-                    cmd.Parameters.AddWithValue("$skip", exact + fileDup + skippedConflicts);
+                    cmd.Parameters.AddWithValue("$skip", exact + fileDup + likely + skippedConflicts - flagged);
                     cmd.Parameters.AddWithValue("$rej", invalid);
                     if (await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
                         throw new InvalidOperationException($"Batch {batchId} changed state during commit; rolled back.");
@@ -199,10 +212,12 @@ public sealed partial class SqliteStagingStore
                 committed = true;
 
                 ok = new CommitResult(true, CommitFailure.None,
-                    $"Committed batch {batchId}: {inserted:N0} new, {updated:N0} updated, " +
-                    $"{exact:N0} exact duplicates, {fileDup:N0} duplicates inside the file, " +
+                    $"Committed batch {batchId}: {inserted:N0} imported ({flagged:N0} of them flagged duplicates), {updated:N0} updated, " +
+                    $"{exact - importedExact:N0} already in the database skipped, {fileDup - importedFile:N0} repeats inside the file skipped, " +
+                    $"{likely - importedLikely:N0} possible duplicates skipped, " +
                     $"{skippedConflicts:N0} conflicts kept as they were, {invalid:N0} invalid rows rejected.",
-                    inserted, updated, exact, fileDup, skippedConflicts, invalid);
+                    inserted - flagged, updated, exact - importedExact, fileDup - importedFile, skippedConflicts, invalid,
+                    ImportedFlaggedDuplicates: flagged, SkippedLikelyDuplicates: likely - importedLikely);
             }
             finally
             {

@@ -33,6 +33,9 @@ public sealed record TransactionFilter
     public TextCriterion RegNo { get; init; }
     public TextCriterion PayOrderNo { get; init; }
     public TextCriterion TxnRefSeqNo { get; init; }
+
+    /// <summary>The slip number found in Narration 1 at import (see NarrationExtractor).</summary>
+    public TextCriterion SlipNo { get; init; }
     public TextCriterion ChallanNo { get; init; }
     public TextCriterion ChequeInstNo { get; init; }
     public TextCriterion AccountNo { get; init; }
@@ -74,6 +77,7 @@ public sealed record TransactionFilter
         RegNo = Clean(RegNo),
         PayOrderNo = Clean(PayOrderNo),
         TxnRefSeqNo = Clean(TxnRefSeqNo),
+        SlipNo = Clean(SlipNo),
         ChallanNo = Clean(ChallanNo),
         ChequeInstNo = Clean(ChequeInstNo),
         AccountNo = Clean(AccountNo),
@@ -112,7 +116,7 @@ public sealed record TransactionFilter
 
     private string Key() => string.Join('\u001F', new object?[]
     {
-        ValueDateFrom, ValueDateTo, Cnic, ApplicationNo, RegNo, PayOrderNo, TxnRefSeqNo, ChallanNo, ChequeInstNo, AccountNo,
+        ValueDateFrom, ValueDateTo, Cnic, ApplicationNo, RegNo, PayOrderNo, TxnRefSeqNo, SlipNo, ChallanNo, ChequeInstNo, AccountNo,
         CustomerName, CustomerNameMode, string.Join('\u001E', BankNames), string.Join('\u001E', Projects), string.Join('\u001E', DealerNames),
         string.Join('\u001E', BranchNames), string.Join('\u001E', DataSources),
         CreditMin, CreditMax, DebitMin, DebitMax, DownPaymentMin, DownPaymentMax, ImportBatchId,

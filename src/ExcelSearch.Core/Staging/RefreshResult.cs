@@ -41,6 +41,7 @@ public sealed record RefreshResult(
         RowStatus.Conflict => "Conflict",
         RowStatus.Invalid => "Invalid",
         RowStatus.FileDuplicate => "Repeated in file",
+        RowStatus.LikelyDuplicate => "Possible duplicate",
         _ => s.ToString(),
     };
 }

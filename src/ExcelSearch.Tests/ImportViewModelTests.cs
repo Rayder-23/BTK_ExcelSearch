@@ -76,9 +76,18 @@ internal sealed class FakeImportPreviewService : IImportPreviewService
         return Task.FromResult(OnRefresh());
     }
 
-    public Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default)
+    /// <summary>The skipFlaggedDuplicates argument of every commit, in order.</summary>
+    public List<bool> CommitSkipFlags { get; } = new();
+
+    /// <summary>What the "database" says about key-less rows flagged as duplicates.</summary>
+    public int FlaggedInDb { get; set; }
+
+    public Task<int> GetFlaggedKeylessCountAsync(int batchId, CancellationToken ct = default) => Task.FromResult(FlaggedInDb);
+
+    public Task<CommitResult> CommitAsync(int batchId, bool skipFlaggedDuplicates = false, CancellationToken ct = default)
     {
         Commits.Add(batchId);
+        CommitSkipFlags.Add(skipFlaggedDuplicates);
         return OnCommit(batchId);
     }
 
@@ -178,9 +187,29 @@ public class ImportViewModelTests
         Assert.Equal(15, vm.TotalRows);
         Assert.Equal((3, 2, 1, 4, 5),
             (vm.NewCount, vm.ConflictCount, vm.InvalidCount, vm.ExactDuplicateCount, vm.FileDuplicateCount));
-        Assert.Equal(new[] { "New", "Conflicts", "Invalid", "Already in database", "Repeated in file" },
+        Assert.Equal(new[] { "New", "Conflicts", "Invalid", "Already in database", "Repeated in file", "Possible duplicates" },
             vm.Tabs.Select(t => t.Title));
         Assert.Equal(@"C:\data\sample.xlsx", Assert.Single(_service.StagedPaths));
+    }
+
+    [Fact]
+    public async Task Flagged_duplicates_are_imported_unless_the_user_ticks_skip()
+    {
+        _service.FlaggedInDb = 4;
+        var vm = await StagedAsync(@new: 3, conflict: 0);
+
+        // The button says what will happen, and the commit passes the choice on.
+        Assert.True(vm.HasFlagged);
+        Assert.Equal("Import 3 new rows (+4 flagged duplicates)", vm.CommitButtonText);
+        await vm.CommitCommand.ExecuteAsync(null);
+        Assert.Equal(new[] { false }, _service.CommitSkipFlags);
+        Assert.Contains("insert 4 more rows", _dialogs.ConfirmMessages.Single());
+
+        var again = await StagedAsync(@new: 3, conflict: 0);
+        again.SkipFlaggedDuplicates = true;
+        Assert.Equal("Import 3 new rows", again.CommitButtonText);
+        await again.CommitCommand.ExecuteAsync(null);
+        Assert.Equal(new[] { false, true }, _service.CommitSkipFlags);
     }
 
     [Fact]

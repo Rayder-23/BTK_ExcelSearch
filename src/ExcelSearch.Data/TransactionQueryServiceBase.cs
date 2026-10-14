@@ -171,15 +171,15 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
     public Task<TransactionDetail?> GetDetailAsync(TransactionKey key, CancellationToken ct = default) =>
         Run(async db =>
         {
-            var po = key.PayOrderNo;
-            var tx = key.TxnRefSeqNo;
+            var id = key.Id;
             return await db.Transactions.AsNoTracking()
-                .Where(t => t.PayOrderNo == po && t.TxnRefSeqNo == tx)
+                .Where(t => t.Id == id)
                 .Select(t => new TransactionDetail(
-                    new TransactionRecord(t.PayOrderNo, t.TxnRefSeqNo, t.ValueDate, t.BranchCode, t.BranchName, t.RegNo,
+                    new TransactionRecord(t.Id, t.PayOrderNo, t.TxnRefSeqNo, t.ValueDate, t.BranchCode, t.BranchName, t.RegNo,
                         t.ApplicationNo, t.PlotNo, t.StreetNo, t.ChallanNo, t.ChequeInstNo, t.CustomerName, t.Cnic, t.Discount,
                         t.DownPaymentAmount, t.Debit, t.Credit, t.RunningBalance, t.BankName, t.AccountNo, t.Project,
-                        t.DealerName, t.DataSource, t.Narration1, t.Narration2, t.Narration3, t.Narration4, t.Narration5),
+                        t.DealerName, t.DataSource, t.Narration1, t.Narration2, t.Narration3, t.Narration4, t.Narration5,
+                        t.SlipNo, t.NarrationCnic),
                     new ImportProvenance(t.ImportBatchId, t.ImportBatch.FileName, t.ImportBatch.SheetName,
                         t.ImportBatch.ImportedAt, t.ImportBatch.ImportedBy, t.SourceRowNumber, t.CreatedAt, t.UpdatedAt)))
                 .FirstOrDefaultAsync(ct).ConfigureAwait(false);
@@ -205,8 +205,8 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
     }
 
     /// <summary>
-    /// Every matching row in primary-key order, <paramref name="chunkSize"/> at a time. Each chunk asks for the rows after
-    /// the last key already seen (keyset paging), so the cost per chunk is the same on the first and the thousandth chunk
+    /// Every matching row in Id order, <paramref name="chunkSize"/> at a time. Each chunk asks for the rows after
+    /// the last Id already seen (keyset paging), so the cost per chunk is the same on the first and the thousandth chunk
     /// and nothing is held between chunks.
     /// </summary>
     public async IAsyncEnumerable<IReadOnlyList<TransactionRecord>> StreamChunksAsync(TransactionFilter filter, int chunkSize,
@@ -222,12 +222,10 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
                 var q = Apply(db.Transactions.AsNoTracking(), f);
                 if (after is { } k)
                 {
-                    var po = k.PayOrderNo;
-                    var tx = k.TxnRefSeqNo;
-                    q = q.Where(t => string.Compare(t.PayOrderNo, po) > 0 ||
-                                     (t.PayOrderNo == po && string.Compare(t.TxnRefSeqNo, tx) > 0));
+                    var id = k.Id;
+                    q = q.Where(t => t.Id.CompareTo(id) > 0);
                 }
-                return await q.OrderBy(t => t.PayOrderNo).ThenBy(t => t.TxnRefSeqNo).Take(chunkSize)
+                return await q.OrderBy(t => t.Id).Take(chunkSize)
                     .Select(ToRecord).ToListAsync(ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
@@ -241,10 +239,10 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
     // ---- building the query ----------------------------------------------------------------------------------
 
     private static readonly Expression<Func<Transaction, TransactionRecord>> ToRecord = t => new TransactionRecord(
-        t.PayOrderNo, t.TxnRefSeqNo, t.ValueDate, t.BranchCode, t.BranchName, t.RegNo, t.ApplicationNo, t.PlotNo, t.StreetNo,
+        t.Id, t.PayOrderNo, t.TxnRefSeqNo, t.ValueDate, t.BranchCode, t.BranchName, t.RegNo, t.ApplicationNo, t.PlotNo, t.StreetNo,
         t.ChallanNo, t.ChequeInstNo, t.CustomerName, t.Cnic, t.Discount, t.DownPaymentAmount, t.Debit, t.Credit,
         t.RunningBalance, t.BankName, t.AccountNo, t.Project, t.DealerName, t.DataSource,
-        t.Narration1, t.Narration2, t.Narration3, t.Narration4, t.Narration5);
+        t.Narration1, t.Narration2, t.Narration3, t.Narration4, t.Narration5, t.SlipNo, t.NarrationCnic);
 
     /// <summary>The filtered, ordered query (what a page reads). Exposed so tests can inspect the SQL.</summary>
     internal IQueryable<Transaction> Build(IQueryable<Transaction> q, TransactionFilter normalizedFilter, TransactionSort sort) =>
@@ -256,11 +254,14 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
         if (f.ValueDateFrom is { } from) q = q.Where(t => t.ValueDate >= from);
         if (f.ValueDateTo is { } to) q = q.Where(t => t.ValueDate <= to);
 
-        q = Text(q, f.Cnic, t => t.Cnic);
+        // The CNIC filter finds a row by its CNIC column OR by the CNIC found in the narrations at import.
+        if (!f.Cnic.IsEmpty)
+            q = q.Where(Or(TextMatch(t => t.Cnic, f.Cnic.Value!, f.Cnic.Mode), TextMatch(t => t.NarrationCnic, f.Cnic.Value!, f.Cnic.Mode)));
         q = Text(q, f.ApplicationNo, t => t.ApplicationNo);
         q = Text(q, f.RegNo, t => t.RegNo);
         q = Text(q, f.PayOrderNo, t => t.PayOrderNo);
         q = Text(q, f.TxnRefSeqNo, t => t.TxnRefSeqNo);
+        q = Text(q, f.SlipNo, t => t.SlipNo);
         q = Text(q, f.ChallanNo, t => t.ChallanNo);
         q = Text(q, f.ChequeInstNo, t => t.ChequeInstNo);
         q = Text(q, f.AccountNo, t => t.AccountNo);
@@ -301,7 +302,7 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
 
     /// <summary>
     /// The sort whitelist: each allowed column maps to a fixed expression; nothing from the caller reaches the SQL text.
-    /// Ties fall back to the primary key (in the same direction as the sort) so the order is total and paging is stable.
+    /// Ties fall back to the row's Id (in the same direction as the sort) so the order is total and paging is stable.
     /// </summary>
     protected IQueryable<Transaction> Order(IQueryable<Transaction> q, TransactionSort sort)
     {
@@ -327,16 +328,31 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
             TransactionColumn.Credit => By(q, t => t.Credit, d),
             TransactionColumn.DownPaymentAmount => By(q, t => t.DownPaymentAmount, d),
             TransactionColumn.RunningBalance => By(q, t => t.RunningBalance, d),
+            TransactionColumn.SlipNo => ByText(q, t => t.SlipNo, d),
             _ => throw new ArgumentOutOfRangeException(nameof(sort), sort.Column, "Not a sortable column."),
         };
 
-        // Tie-breakers (a column cannot appear twice in ORDER BY).
-        // They follow the main direction on purpose: an index on (ValueDate) also holds the key columns, so it can be read
-        // backwards for "newest first" only if the tie-break runs backwards too. (Measured: 2.4 s with an ascending
-        // tie-break on 500,000 rows because everything had to be sorted; see docs/Performance.md.)
-        if (sort.Column != TransactionColumn.PayOrderNo) o = d ? o.ThenByDescending(t => t.PayOrderNo) : o.ThenBy(t => t.PayOrderNo);
-        if (sort.Column != TransactionColumn.TxnRefSeqNo) o = d ? o.ThenByDescending(t => t.TxnRefSeqNo) : o.ThenBy(t => t.TxnRefSeqNo);
-        return o;
+        // Tie-breaker: Id, the primary key (rows have no other unique value: PayOrderNo / TxnRefSeqNo are optional).
+        // It follows the main direction on purpose: an index on (ValueDate) also holds the clustered key (Id), so it can be read
+        // backwards for "newest first" only if the tie-break runs backwards too. (Measured with the old key: 2.4 s with an
+        // ascending tie-break on 500,000 rows because everything had to be sorted; see docs/Performance.md.)
+        return d ? o.ThenByDescending(t => t.Id) : o.ThenBy(t => t.Id);
+    }
+
+    /// <summary>a OR b over the same row, as one expression EF can translate.</summary>
+    private static Expression<Func<Transaction, bool>> Or(Expression<Func<Transaction, bool>> a, Expression<Func<Transaction, bool>> b)
+    {
+        var p = Expression.Parameter(typeof(Transaction), "t");
+        var body = Expression.OrElse(new ParameterReplacer(a.Parameters[0], p).Visit(a.Body)!,
+                                     new ParameterReplacer(b.Parameters[0], p).Visit(b.Body)!);
+        return Expression.Lambda<Func<Transaction, bool>>(body, p);
+    }
+
+    private sealed class ParameterReplacer : ExpressionVisitor
+    {
+        private readonly ParameterExpression _from, _to;
+        public ParameterReplacer(ParameterExpression from, ParameterExpression to) { _from = from; _to = to; }
+        protected override Expression VisitParameter(ParameterExpression node) => node == _from ? _to : base.VisitParameter(node);
     }
 
     private static IOrderedQueryable<Transaction> By<TKey>(IQueryable<Transaction> q, Expression<Func<Transaction, TKey>> key, bool descending) =>

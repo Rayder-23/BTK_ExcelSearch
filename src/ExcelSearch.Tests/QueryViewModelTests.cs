@@ -25,10 +25,13 @@ internal sealed class FakeQueryService : ITransactionQueryService
     public int Invalidations { get; private set; }
     public int DistinctCalls { get; private set; }
 
+    /// <summary>A predictable id for row i, so tests can recognise the row a details request is about.</summary>
+    public static Guid Gid(int i) => new(i, 0, 0, new byte[8]);
+
     public static TransactionRecord Rec(int i, string? bank = "HBL") => new(
-        $"PO{i:0000}", $"TX{i:0000}", new DateOnly(2024, 1, 1).AddDays(i % 28), "BC1", "Branch", "REG" + i, "APP" + i, null, null,
+        Gid(i), $"PO{i:0000}", $"TX{i:0000}", new DateOnly(2024, 1, 1).AddDays(i % 28), "BC1", "Branch", "REG" + i, "APP" + i, null, null,
         "CH" + i, "CQ" + i, "Customer " + i, "4210000000" + (i % 1000).ToString("000"), null, i % 5 == 0 ? 500m : null, 10m * i, 20m * i, null,
-        bank, "ACC" + i, "Project", "Dealer", "Source", "n1", null, null, null, null);
+        bank, "ACC" + i, "Project", "Dealer", "Source", "n1", null, null, null, null, "SLIP" + i, null);
 
     public Task<TransactionPage> SearchAsync(TransactionFilter filter, TransactionSort sort, int pageNumber, int pageSize, CancellationToken ct = default) =>
         throw new NotSupportedException("The screen never calls SearchAsync: it asks for the page, count and totals separately.");
@@ -484,17 +487,17 @@ public class QueryViewModelTests
     public void Every_grid_column_sorts_by_a_whitelisted_column_and_binds_to_a_real_property()
     {
         var (vm, _, _, _) = Make();
-        Assert.Equal(28, vm.Columns.Count);                       // every one of the 28 fields can be shown and exported
+        Assert.Equal(30, vm.Columns.Count);                       // every one of the 30 fields can be shown and exported
         foreach (var c in vm.Columns)
         {
             if (c.Sort is { } sort) Assert.True(Enum.IsDefined(sort), c.Header);
             Assert.NotNull(typeof(TransactionRecord).GetProperty(c.Path));
         }
-        Assert.Equal(28, vm.Columns.Select(c => c.Path).Distinct().Count());
+        Assert.Equal(30, vm.Columns.Select(c => c.Path).Distinct().Count());
         var sortable = vm.Columns.Where(c => c.Sort is not null).Select(c => c.Sort).ToArray();
         Assert.Equal(sortable.Length, sortable.Distinct().Count());
-        Assert.Equal(19, sortable.Length);                        // exactly the TransactionColumn whitelist
-        Assert.Equal(new[] { "Discount", "Branch code", "Plot no", "Street no", "Narration 1", "Narration 2", "Narration 3", "Narration 4", "Narration 5" },
+        Assert.Equal(20, sortable.Length);                        // exactly the TransactionColumn whitelist
+        Assert.Equal(new[] { "Discount", "Branch code", "Plot no", "Street no", "Narration 1", "Narration 2", "Narration 3", "Narration 4", "Narration 5", "CNIC in narration" },
             vm.Columns.Where(c => c.Sort is null).Select(c => c.Header));
     }
 
@@ -623,7 +626,7 @@ public class QueryViewModelTests
         CancellationToken firstToken = default;
         var (vm, svc, _, _) = Make(s => s.OnDetail = (key, ct) =>
         {
-            if (key.PayOrderNo == "PO0001") { firstToken = ct; return first.Task; }
+            if (key.Id == FakeQueryService.Gid(1)) { firstToken = ct; return first.Task; }
             return Task.FromResult<TransactionDetail?>(new TransactionDetail(s.Data.First(d => d.Key == key),
                 new ImportProvenance(9, "second.xlsx", null, DateTime.UtcNow, null, null, DateTime.UtcNow, null)));
         });
@@ -877,13 +880,12 @@ public class QueryViewModelTests
         var shown = vm.ColumnChoices.Where(c => c.IsVisible).Select(c => c.Header).ToArray();
         Assert.Equal(new[]
         {
-            "Value date", "Pay order no", "Txn ref / seq", "Customer", "CNIC", "Application no", "Bank", "Project", "Dealer",
-            "Debit", "Credit", "Down payment",
+            "Value date", "Slip no", "Customer", "CNIC", "Bank", "Account no", "Project", "Debit", "Credit", "Narration 1", "Narration 2",
         }, shown);
-        Assert.Equal(16, vm.ColumnChoices.Count(c => !c.IsVisible));  // reg no, account, branch, challan, cheque, data source + the 10 rarely needed fields
+        Assert.Equal(19, vm.ColumnChoices.Count(c => !c.IsVisible));  // pay order, txn ref, application no, dealer, down payment, reg no, ... (most statement rows have none of them)
 
-        vm.ColumnChoices.Single(c => c.Header == "Account no").IsVisible = true;
-        Assert.Contains("Account no", vm.ColumnChoices.Where(c => c.IsVisible).Select(c => c.Header));
+        vm.ColumnChoices.Single(c => c.Header == "Pay order no").IsVisible = true;
+        Assert.Contains("Pay order no", vm.ColumnChoices.Where(c => c.IsVisible).Select(c => c.Header));
     }
 
     // ---- export: selected columns (default) or all columns -----------------------------------------------
@@ -896,15 +898,15 @@ public class QueryViewModelTests
         dialogs.ExportTargetToPick = new ExportTarget(@"C:\o\a.xlsx", ExportFormat.Xlsx);
         Assert.Equal(QueryViewModel.SelectedColumnsScope, vm.ExportScope);
 
-        vm.ColumnChoices.Single(c => c.Header == "Dealer").IsVisible = false;        // unticked in the picker
-        vm.ColumnChoices.Single(c => c.Header == "Narration 1").IsVisible = true;    // a normally hidden field, ticked
+        vm.ColumnChoices.Single(c => c.Header == "Project").IsVisible = false;       // unticked in the picker
+        vm.ColumnChoices.Single(c => c.Header == "Pay order no").IsVisible = true;   // a normally hidden field, ticked
 
         await vm.ExportCommand.ExecuteAsync(null);
 
         Assert.Equal(new[]
         {
-            "ValueDate", "PayOrderNo", "TxnRefSeqNo", "CustomerName", "Cnic", "ApplicationNo", "BankName", "Project",
-            "Debit", "Credit", "DownPaymentAmount", "Narration1",
+            "ValueDate", "SlipNo", "PayOrderNo", "CustomerName", "Cnic", "BankName", "AccountNo",
+            "Debit", "Credit", "Narration1", "Narration2",
         }, svc.ExportColumnCalls.Single());
     }
 

@@ -13,28 +13,20 @@ public sealed partial class SqlServerStagingStore
     // Same idea as ClassifyChunk: bounded statements so one re-check cannot escalate to a table lock on ImportStaging.
     private const int RefreshChunk = 4_000;
 
-    // New (2), Already in database (3) and Conflict (5) rows are recomputed against Transactions on BOTH key columns.
+    // New (2), Already in database (3), Conflict (5) and Possible duplicate (6) rows are recomputed against Transactions
+    // by the same rule as classification (StatusSql): by key for keyed rows, by content / slip number for key-less ones.
     // A row is only written when its status or ExistingRowHash actually changed, so an unchanged batch writes nothing.
     // Overwrite survives only for a row that was a Conflict, still is one, and whose existing row did not change;
     // in every other changed case it is reset to 0. (In an UPDATE's SET list every s.* is the value before the update.)
-    private const string RefreshSql = """
-        UPDATE s
-        SET Status = n.NewStatus,
-            ExistingRowHash = n.NewExisting,
-            Overwrite = CASE WHEN n.NewStatus = 5 AND s.Status = 5 AND s.Overwrite = 1
-                              AND s.ExistingRowHash = n.NewExisting THEN 1 ELSE 0 END
-        OUTPUT deleted.Status, inserted.Status, deleted.Overwrite, inserted.Overwrite
-        FROM dbo.ImportStaging AS s
-        LEFT JOIN dbo.Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo
-        CROSS APPLY (SELECT CASE WHEN t.PayOrderNo IS NULL THEN CAST(2 AS tinyint)
-                                 WHEN t.RowHash = s.RowHash THEN CAST(3 AS tinyint)
-                                 ELSE CAST(5 AS tinyint) END AS NewStatus,
-                            CASE WHEN t.PayOrderNo IS NULL THEN CAST(NULL AS varchar(64)) ELSE t.RowHash END AS NewExisting) AS n
-        WHERE s.ImportBatchId = @b
-          AND s.Status IN (2, 3, 5)
-          AND s.ExcelRowNumber BETWEEN @lo AND @hi
-          AND (s.Status <> n.NewStatus OR ISNULL(s.ExistingRowHash, '') <> ISNULL(n.NewExisting, ''));
-        """;
+    private static readonly string RefreshSql =
+        "UPDATE s SET Status = n.NewStatus, ExistingRowHash = n.NewExisting, " +
+        "Overwrite = CASE WHEN n.NewStatus = 5 AND s.Status = 5 AND s.Overwrite = 1 AND s.ExistingRowHash = n.NewExisting THEN 1 ELSE 0 END " +
+        "OUTPUT deleted.Status, inserted.Status, deleted.Overwrite, inserted.Overwrite " +
+        "FROM dbo.ImportStaging AS s " +
+        "LEFT JOIN dbo.Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo " +
+        "CROSS APPLY (SELECT CAST(" + StatusSql.NewStatus + " AS tinyint) AS NewStatus, " + StatusSql.ExistingHash + " AS NewExisting) AS n " +
+        "WHERE s.ImportBatchId = @b AND s.Status IN (2, 3, 5, 6) AND s.ExcelRowNumber BETWEEN @lo AND @hi " +
+        "AND (s.Status <> n.NewStatus OR ISNULL(s.ExistingRowHash, '') <> ISNULL(n.NewExisting, ''));";
 
     public override async Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default)
     {
@@ -63,7 +55,7 @@ public sealed partial class SqlServerStagingStore
             return RefreshResult.Refused($"Batch {batchId} is '{status}', not 'Staged', so it can no longer be re-checked.");
 
         int? maxRow;
-        await using (var cmd = Cmd("SELECT MAX(ExcelRowNumber) FROM dbo.ImportStaging WHERE ImportBatchId = @b AND Status IN (2, 3, 5)"))
+        await using (var cmd = Cmd("SELECT MAX(ExcelRowNumber) FROM dbo.ImportStaging WHERE ImportBatchId = @b AND Status IN (2, 3, 5, 6)"))
         {
             var v = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
             maxRow = v is null or DBNull ? null : Convert.ToInt32(v);

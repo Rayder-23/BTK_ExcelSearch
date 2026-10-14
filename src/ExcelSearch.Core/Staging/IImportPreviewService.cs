@@ -17,7 +17,7 @@ public interface IImportPreviewService
     Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite, IReadOnlyCollection<int>? excelRowNumbers = null,
         CancellationToken ct = default);
 
-    Task<CommitResult> CommitAsync(int batchId, CancellationToken ct = default);
+    Task<CommitResult> CommitAsync(int batchId, bool skipFlaggedDuplicates = false, CancellationToken ct = default);
 
     Task<DiscardResult> DiscardAsync(int batchId, CancellationToken ct = default);
 
@@ -30,6 +30,9 @@ public interface IImportPreviewService
 
     /// <summary>Conflict totals (all conflicts, and how many will overwrite) straight from the database.</summary>
     Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default);
+
+    /// <summary>Key-less rows flagged as duplicates: imported on commit unless flagged duplicates are skipped.</summary>
+    Task<int> GetFlaggedKeylessCountAsync(int batchId, CancellationToken ct = default);
 
     /// <summary>Re-checks the batch against the database; refused (not thrown) if it is not 'Staged'.</summary>
     Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default);

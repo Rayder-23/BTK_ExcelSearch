@@ -14,7 +14,7 @@ public static class TransactionExportWriter
     /// <summary>One exportable field: the TransactionRecord property name, the header text in the file, and how to read it.</summary>
     private sealed record Field(string Name, string Header, Func<TransactionRecord, object?> Get);
 
-    // The 28 fields in the order a full export writes them. A caller picks a subset by property name (see WriteAsync).
+    // The 30 fields in the order a full export writes them. A caller picks a subset by property name (see WriteAsync).
     private static readonly Field[] Fields =
     {
         new(nameof(TransactionRecord.PayOrderNo), "Pay Order No", r => r.PayOrderNo),
@@ -45,6 +45,8 @@ public static class TransactionExportWriter
         new(nameof(TransactionRecord.Narration3), "Narration 3", r => r.Narration3),
         new(nameof(TransactionRecord.Narration4), "Narration 4", r => r.Narration4),
         new(nameof(TransactionRecord.Narration5), "Narration 5", r => r.Narration5),
+        new(nameof(TransactionRecord.SlipNo), "Slip No", r => r.SlipNo),
+        new(nameof(TransactionRecord.NarrationCnic), "Narration CNIC", r => r.NarrationCnic),
     };
 
     /// <summary>The property names that can be exported, in full-export order.</summary>
@@ -52,7 +54,7 @@ public static class TransactionExportWriter
 
     /// <summary>
     /// Looks the requested names up in the fixed table (so a caller can never name anything else), keeping the caller's order.
-    /// Null means all 28 fields. Throws before any file is created if a name is unknown, listed twice, or the list is empty.
+    /// Null means all 30 fields. Throws before any file is created if a name is unknown, listed twice, or the list is empty.
     /// </summary>
     private static Field[] Pick(IReadOnlyList<string>? names)
     {
@@ -69,7 +71,7 @@ public static class TransactionExportWriter
         return picked.ToArray();
     }
 
-    /// <param name="columns">The property names to write, in this order; null writes all 28.</param>
+    /// <param name="columns">The property names to write, in this order; null writes all 30.</param>
     /// <returns>The number of data rows written.</returns>
     public static async Task<long> WriteAsync(IAsyncEnumerable<IReadOnlyList<TransactionRecord>> chunks, ExportFormat format,
         string destinationPath, IProgress<long>? progress, CancellationToken ct, IReadOnlyList<string>? columns = null)

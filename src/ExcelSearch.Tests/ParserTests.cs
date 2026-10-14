@@ -214,15 +214,15 @@ public class ParserTests : IDisposable
     {
         var path = Workbook(ws =>
         {
-            WriteHeaders(ws, headers: new[] { "Value Date", "payorder no", "Customer Name" });
-            ws.Cell(2, 1).Value = new DateTime(2024, 4, 3);
-            ws.Cell(2, 2).Value = "PO1";
+            WriteHeaders(ws, headers: new[] { "payorder no", "Txn Ref/ Seq No", "Customer Name" });   // no Value Date
+            ws.Cell(2, 1).Value = "PO1";
+            ws.Cell(2, 2).Value = "T1";
         });
 
         var r = Parse(path);
         Assert.Empty(r.Rows);
         var error = Assert.Single(r.FileErrors);
-        Assert.Contains("Txn Ref/ Seq No", error);
+        Assert.Contains("Value Date", error);
     }
 
     [Fact]
@@ -280,7 +280,7 @@ public class ParserTests : IDisposable
     }
 
     [Fact]
-    public void Missing_required_fields_each_give_one_error()
+    public void Only_the_value_date_is_required_pay_order_and_txn_ref_are_optional()
     {
         var path = Workbook(ws =>
         {
@@ -289,7 +289,19 @@ public class ParserTests : IDisposable
         });
 
         var row = Assert.Single(Parse(path).Rows);
-        Assert.Equal(new[] { "PayOrderNo", "TxnRefSeqNo", "ValueDate" }, row.Errors.Select(e => e.Field).OrderBy(x => x));
+        Assert.Equal(new[] { "ValueDate" }, row.Errors.Select(e => e.Field));
+
+        // With a date the same row is valid, key-less, and its hash does not depend on a key.
+        var withDate = Workbook(ws =>
+        {
+            WriteHeaders(ws);
+            ws.Cell(2, Col("Value Date")).Value = new DateTime(2024, 4, 3);
+            ws.Cell(2, Col("Customer Name")).Value = "Nobody";
+        });
+        var ok = Assert.Single(Parse(withDate).Rows);
+        Assert.True(ok.IsValid);
+        Assert.Null(ok.PayOrderNo);
+        Assert.Null(ok.TxnRefSeqNo);
     }
 
     [Fact]
@@ -371,4 +383,30 @@ public class ParserTests : IDisposable
         cts.Cancel();
         Assert.ThrowsAny<OperationCanceledException>(() => file.Rows.ToList());
     }
+}
+
+public class NarrationExtractorTests
+{
+    [Theory]
+    [InlineData("03128211", "03128211")]
+    [InlineData("R 02704864", "02704864")]                // letter prefix is dropped
+    [InlineData("SLIP 12345678 HBL", "12345678")]
+    [InlineData("1234567", null)]                         // too short
+    [InlineData("123456789", null)]                       // part of a longer number
+    [InlineData("no digits here", null)]
+    [InlineData("", null)]
+    public void Slip_no_is_the_8_digit_run_in_narration_1(string text, string? expected)
+        => Assert.Equal(expected, NarrationExtractor.SlipNo(text));
+
+    [Theory]
+    [InlineData("4220118364377", "4220118364377")]
+    [InlineData("KHALID 42301-9574531-3 KYC", "4230195745313")]   // dashes are dropped
+    [InlineData("03009212009 0599", null)]                        // an 11-digit phone number is not a CNIC
+    [InlineData("42201183643771", null)]                          // 14 digits: part of a longer number
+    public void Narration_cnic_is_a_13_digit_number_not_part_of_a_longer_one(string text, string? expected)
+        => Assert.Equal(expected, NarrationExtractor.NarrationCnic(text));
+
+    [Fact]
+    public void Narration_cnic_looks_in_narrations_2_to_5_and_takes_the_first_match()
+        => Assert.Equal("1111111111111", NarrationExtractor.NarrationCnic(null, "no", "1111111111111", "2222222222222"));
 }

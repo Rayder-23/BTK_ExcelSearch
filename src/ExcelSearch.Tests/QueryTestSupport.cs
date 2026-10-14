@@ -65,6 +65,8 @@ internal static class QuerySeed
         Narration1 = $"Narration one {i}",
         Narration2 = $"Narration two {i}",
         Narration3 = i % 3 == 0 ? $"Narration three {i}" : null,
+        SlipNo = $"9{i:0000000}",
+        NarrationCnic = i % 3 == 0 ? $"3520{i:D9}" : null,
     };
 
     public static async Task InsertAsync(StagingEnv env, IEnumerable<Transaction> rows)
