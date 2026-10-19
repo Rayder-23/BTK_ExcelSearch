@@ -15,10 +15,24 @@ internal static class NarrationExtractor
     // A CNIC is 13 digits, written plain or as 12345-1234567-1, not part of a longer number.
     private static readonly Regex Cnic = new(@"(?<!\d)(\d{5})-?(\d{7})-?(\d)(?!\d)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // UBL statements carry the branch inside Narration 1 ("... /Br: 1872 /Doc No:791666069") and leave the Br. Code column empty.
+    private static readonly Regex Branch = new(@"/Br:\s*(\d{1,10})", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     public static void Apply(ImportRow row)
     {
-        row.SlipNo = SlipNo(row.Narration1);
+        // A row with a Txn Ref (the bank's own reference, e.g. UBL) has no slip number: its narration is bank text whose
+        // digit runs would be mistaken for one. Cash rows (HBL) have no Txn Ref and carry the slip number in Narration 1.
+        row.SlipNo = string.IsNullOrEmpty(row.TxnRefSeqNo) ? SlipNo(row.Narration1) : null;
+        if (string.IsNullOrEmpty(row.BranchCode)) row.BranchCode = BranchCode(row.Narration1);
         row.NarrationCnic = NarrationCnic(row.Narration2, row.Narration3, row.Narration4, row.Narration5);
+    }
+
+    /// <summary>The branch code after "/Br:" in the text (kept as text, so "0949" keeps its zero), or null.</summary>
+    public static string? BranchCode(string? narration1)
+    {
+        if (string.IsNullOrEmpty(narration1)) return null;
+        var m = Branch.Match(narration1);
+        return m.Success ? m.Groups[1].Value : null;
     }
 
     /// <summary>The first 8-digit run in the text, or null.</summary>

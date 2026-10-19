@@ -56,7 +56,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.AccountNo).HasMaxLength(50);
             entity.Property(e => e.ApplicationNo).HasMaxLength(50);
             entity.Property(e => e.BankName).HasMaxLength(100);
-            entity.Property(e => e.BranchCode).HasMaxLength(20);
+            entity.Property(e => e.BranchCode).HasMaxLength(50);
             entity.Property(e => e.BranchName).HasMaxLength(100);
             entity.Property(e => e.ChallanNo).HasMaxLength(50);
             entity.Property(e => e.ChequeInstNo).HasMaxLength(50);
@@ -118,6 +118,8 @@ public partial class AppDbContext : DbContext
 
             entity.HasIndex(e => e.ImportBatchId, "IX_Transactions_ImportBatchId");
 
+            entity.HasIndex(e => new { e.ValueDate, e.BranchCode }, "IX_Transactions_Match");
+
             entity.HasIndex(e => e.NarrationCnic, "IX_Transactions_NarrationCnic").HasFilter("([NarrationCnic] IS NOT NULL)");
 
             entity.HasIndex(e => e.PayOrderNo, "IX_Transactions_PayOrderNo");
@@ -140,7 +142,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.AccountNo).HasMaxLength(50);
             entity.Property(e => e.ApplicationNo).HasMaxLength(50);
             entity.Property(e => e.BankName).HasMaxLength(100);
-            entity.Property(e => e.BranchCode).HasMaxLength(20);
+            entity.Property(e => e.BranchCode).HasMaxLength(50);
             entity.Property(e => e.BranchName).HasMaxLength(100);
             entity.Property(e => e.ChallanNo).HasMaxLength(50);
             entity.Property(e => e.ChequeInstNo).HasMaxLength(50);

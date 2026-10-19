@@ -7,7 +7,7 @@ internal static class FieldLimits
     {
         [nameof(ImportRow.PayOrderNo)] = 50,
         [nameof(ImportRow.TxnRefSeqNo)] = 50,
-        [nameof(ImportRow.BranchCode)] = 20,
+        [nameof(ImportRow.BranchCode)] = 50,
         [nameof(ImportRow.BranchName)] = 100,
         [nameof(ImportRow.RegNo)] = 50,
         [nameof(ImportRow.ApplicationNo)] = 50,

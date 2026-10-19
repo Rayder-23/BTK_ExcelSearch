@@ -17,16 +17,17 @@ public sealed partial class SqliteStagingStore
     // the UPDATE works from a snapshot of the changed rows taken before it writes (it reads the table it updates).
     private static readonly string ChangedRowsCte =
         "WITH cur AS (" +
-        "SELECT s.ExcelRowNumber AS rn, s.Status AS OldStatus, s.Overwrite AS OldOverwrite, s.ExistingRowHash AS OldExisting, " +
-        SqliteStatusSql.NewStatus + " AS NewStatus, " + SqliteStatusSql.ExistingHash + " AS NewExisting " +
-        "FROM ImportStaging AS s " +
+        "SELECT s.ExcelRowNumber AS rn, s.Status AS OldStatus, s.Overwrite AS OldOverwrite, s.ExistingRowHash AS OldExisting, s.MatchReason AS OldReason, " +
+        SqliteStatusSql.NewStatus + " AS NewStatus, " + SqliteStatusSql.ExistingHash + " AS NewExisting, " +
+        "CASE WHEN (" + SqliteStatusSql.NewStatus + ") = 6 THEN s.R END AS NewReason " +
+        "FROM (" + SqliteStatusSql.WithReason("s.ImportBatchId = $b AND s.Status IN (2, 3, 5, 6)") + ") AS s " +
         "LEFT JOIN Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo " +
-        "WHERE s.ImportBatchId = $b AND s.Status IN (2, 3, 5, 6)), " +
+        "), " +
         "chg AS MATERIALIZED (" +
-        "SELECT rn, OldStatus, OldOverwrite, NewStatus, NewExisting, " +
+        "SELECT rn, OldStatus, OldOverwrite, NewStatus, NewExisting, NewReason, " +
         "CASE WHEN NewStatus = 5 AND OldStatus = 5 AND OldOverwrite = 1 AND OldExisting = NewExisting THEN 1 ELSE 0 END AS NewOverwrite " +
         "FROM cur " +
-        "WHERE OldStatus <> NewStatus OR IFNULL(OldExisting, '') <> IFNULL(NewExisting, '')) ";
+        "WHERE OldStatus <> NewStatus OR IFNULL(OldExisting, '') <> IFNULL(NewExisting, '') OR IFNULL(OldReason, 0) <> IFNULL(NewReason, 0)) ";
 
     private static readonly string CountMovesSql = ChangedRowsCte +
         "SELECT OldStatus, NewStatus, COUNT(*), SUM(CASE WHEN OldOverwrite = 1 AND NewOverwrite = 0 THEN 1 ELSE 0 END) " +
@@ -34,7 +35,7 @@ public sealed partial class SqliteStagingStore
 
     private static readonly string ApplyMovesSql = ChangedRowsCte +
         "UPDATE ImportStaging " +
-        "SET Status = chg.NewStatus, ExistingRowHash = chg.NewExisting, Overwrite = chg.NewOverwrite " +
+        "SET Status = chg.NewStatus, ExistingRowHash = chg.NewExisting, Overwrite = chg.NewOverwrite, MatchReason = chg.NewReason " +
         "FROM chg " +
         "WHERE ImportStaging.ImportBatchId = $b AND ImportStaging.ExcelRowNumber = chg.rn;";
 

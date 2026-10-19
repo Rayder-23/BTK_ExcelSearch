@@ -378,7 +378,7 @@ public class SqliteSpecificTests : IClassFixture<SqliteDatabaseFixture>
                 while (r.Read()) tables.Add(r.GetString(0));
             }
             Assert.Equal(new[] { "ImportBatches", "ImportStaging", "Transactions" }, tables);
-            Assert.Equal(18L, (long)Scalar(c, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'IX_%'")!);   // 2 batches + 14 transactions + 2 staging (UX_Transactions_Key is the unique one)
+            Assert.Equal(19L, (long)Scalar(c, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'IX_%'")!);   // 2 batches + 15 transactions + 2 staging (UX_Transactions_Key is the unique one)
         }
         finally { Cleanup(path); }
     }

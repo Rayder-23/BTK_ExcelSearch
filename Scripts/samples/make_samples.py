@@ -125,7 +125,7 @@ def f02_invalid() -> list:
         bad(20, **{"Credit": "12,50x"}),                                           # not an amount
         bad(21, **{"Customer Name": "N" * 250}),                                   # longer than 200 characters
         bad(22, **{"payorder no": "PO-B-" + "9" * 60}),                            # key longer than 50 characters
-        bad(23, **{"Br. Code": "B" * 30}),                                         # longer than 20 characters
+        bad(23, **{"Br. Code": "B" * 60}),                                         # longer than 50 characters
         bad(24, **{"Run. Bal": "#DIV/0!"}),                                        # an Excel error value in the cell
         bad(25, **{"payorder no": None, "Txn Ref/ Seq No": None, "Value Date": None}),   # no key and no date: one error (the date)
     ]

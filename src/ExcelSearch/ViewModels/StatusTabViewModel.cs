@@ -30,6 +30,15 @@ public sealed partial class PreviewRow : ObservableObject
     public ConflictRow? Conflict { get; }
     public bool IsConflict => Conflict is not null;
 
+    /// <summary>Why a Possible-duplicate row was flagged (empty for other rows).</summary>
+    public string MatchReasonText => Row.MatchReason switch
+    {
+        1 => "Same slip no., date, account and amounts",
+        2 => "Same date, amount and branch (a hint)",
+        3 => "Same Txn ref, other values differ",
+        _ => "",
+    };
+
     /// <summary>Bound two-way to the Overwrite checkbox.</summary>
     [ObservableProperty] private bool _isOverwrite;
 
@@ -259,8 +268,9 @@ public partial class StatusTabViewModel : ObservableObject
                                     "Rows without them are flagged and imported anyway, unless you tick Skip flagged duplicates.",
         RowStatus.FileDuplicate => "These rows repeat an identical earlier row of this file. Rows that have a Pay order no + Txn ref are skipped. " +
                                    "Rows without them are flagged and imported anyway (the first copy is under New), unless you tick Skip flagged duplicates.",
-        RowStatus.LikelyDuplicate => "These rows have the same slip number, date, account and amounts as a row in the database, but other values differ. " +
-                                     "It may be the same transaction or a different one, so they are flagged and imported unless you tick Skip flagged duplicates.",
+        RowStatus.LikelyDuplicate => "These rows look like a row already in the database: the same Txn ref, the same slip number, or (cash rows) the same date, amount and branch, " +
+                                     "while other values differ. The Why flagged column says which. It may be the same transaction or a different one, so they are flagged " +
+                                     "and imported unless you tick Skip flagged duplicates.",
         _ => "",
     };
 
@@ -289,6 +299,9 @@ public partial class StatusTabViewModel : ObservableObject
             return cols;
         }
 
+        if (status == RowStatus.LikelyDuplicate)
+            cols.Add(new("Why flagged", nameof(PreviewRow.MatchReasonText), ColumnKind.Text, Width: 250));
+
         cols.AddRange(new GridColumn[]
         {
             new("Value date", "Row.ValueDate", ColumnKind.Mono, "dd-MMM-yyyy", 110),
@@ -297,6 +310,7 @@ public partial class StatusTabViewModel : ObservableObject
             new("Debit", "Row.Debit", ColumnKind.Number, "N2", 120),
             new("Credit", "Row.Credit", ColumnKind.Number, "N2", 120),
             new("Bank", "Row.BankName", ColumnKind.Text, Width: 140),
+            new("Br. code", "Row.BranchCode", ColumnKind.Mono, Width: 80),
             new("Narration 1", "Row.Narration1", ColumnKind.Text, Width: 220),
         });
         return cols;

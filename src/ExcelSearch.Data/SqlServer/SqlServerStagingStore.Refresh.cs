@@ -19,14 +19,16 @@ public sealed partial class SqlServerStagingStore
     // Overwrite survives only for a row that was a Conflict, still is one, and whose existing row did not change;
     // in every other changed case it is reset to 0. (In an UPDATE's SET list every s.* is the value before the update.)
     private static readonly string RefreshSql =
-        "UPDATE s SET Status = n.NewStatus, ExistingRowHash = n.NewExisting, " +
+        "UPDATE s SET Status = n.NewStatus, ExistingRowHash = n.NewExisting, MatchReason = CASE WHEN n.NewStatus = 6 THEN m.R END, " +
         "Overwrite = CASE WHEN n.NewStatus = 5 AND s.Status = 5 AND s.Overwrite = 1 AND s.ExistingRowHash = n.NewExisting THEN 1 ELSE 0 END " +
         "OUTPUT deleted.Status, inserted.Status, deleted.Overwrite, inserted.Overwrite " +
         "FROM dbo.ImportStaging AS s " +
         "LEFT JOIN dbo.Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo " +
+        "CROSS APPLY (SELECT " + StatusSql.Reason + " AS R) AS m " +
         "CROSS APPLY (SELECT CAST(" + StatusSql.NewStatus + " AS tinyint) AS NewStatus, " + StatusSql.ExistingHash + " AS NewExisting) AS n " +
         "WHERE s.ImportBatchId = @b AND s.Status IN (2, 3, 5, 6) AND s.ExcelRowNumber BETWEEN @lo AND @hi " +
-        "AND (s.Status <> n.NewStatus OR ISNULL(s.ExistingRowHash, '') <> ISNULL(n.NewExisting, ''));";
+        "AND (s.Status <> n.NewStatus OR ISNULL(s.ExistingRowHash, '') <> ISNULL(n.NewExisting, '') " +
+        "OR ISNULL(s.MatchReason, 0) <> ISNULL(CASE WHEN n.NewStatus = 6 THEN m.R END, 0));";
 
     public override async Task<RefreshResult> RefreshAgainstDatabaseAsync(int batchId, CancellationToken ct = default)
     {

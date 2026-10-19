@@ -497,7 +497,7 @@ public class QueryViewModelTests
         var sortable = vm.Columns.Where(c => c.Sort is not null).Select(c => c.Sort).ToArray();
         Assert.Equal(sortable.Length, sortable.Distinct().Count());
         Assert.Equal(30, sortable.Length);                        // every column sorts on the server: all 30 are in the TransactionColumn whitelist
-        Assert.Empty(vm.Columns.Where(c => c.Sort is null));
+        Assert.DoesNotContain(vm.Columns, c => c.Sort is null);
     }
 
     // ---- empty and error states ------------------------------------------------------------------------

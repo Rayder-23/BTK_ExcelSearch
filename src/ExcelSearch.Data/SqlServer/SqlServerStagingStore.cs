@@ -153,9 +153,11 @@ public sealed partial class SqlServerStagingStore : StagingStoreBase
         {
             var hi = lo + ClassifyChunk - 1;
             await db.Database.ExecuteSqlRawAsync(
-                "UPDATE s SET Status = " + StatusSql.NewStatus + ", ExistingRowHash = " + StatusSql.ExistingHash + " " +
+                "UPDATE s SET Status = " + StatusSql.NewStatus + ", ExistingRowHash = " + StatusSql.ExistingHash + ", " +
+                "MatchReason = CASE WHEN " + StatusSql.NewStatus + " = 6 THEN m.R END " +
                 "FROM dbo.ImportStaging AS s " +
                 "LEFT JOIN dbo.Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo " +
+                "CROSS APPLY (SELECT " + StatusSql.Reason + " AS R) AS m " +
                 "WHERE s.ImportBatchId = {0} AND s.Status = 0 AND s.ExcelRowNumber BETWEEN {1} AND {2};",
                 new object[] { batchId, lo, hi }, ct).ConfigureAwait(false);
         }

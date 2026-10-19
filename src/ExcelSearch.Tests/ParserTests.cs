@@ -32,6 +32,8 @@ public class NormalizerTests
         Assert.Equal("1234567890123", FieldNormalizer.Text(1234567890123d));
         Assert.Equal("42", FieldNormalizer.Text(42.0d));        // no ".0"
         Assert.Equal("5000000000000", FieldNormalizer.Text(5e12)); // no "5E+12"
+        Assert.NotNull(FieldNormalizer.Text(1e30));                // too big for a decimal: must not throw and stop the import
+        Assert.NotNull(FieldNormalizer.Text(double.NaN));
         Assert.Equal("00123", FieldNormalizer.Text("00123"));    // leading zeros survive in text
         Assert.Equal("AB 1", FieldNormalizer.Text("  AB 1  "));
         Assert.Null(FieldNormalizer.Text("   "));
@@ -325,7 +327,7 @@ public class ParserTests : IDisposable
             ws.Cell(2, Col("Value Date")).Value = new DateTime(2024, 4, 3);
             ws.Cell(2, Col("payorder no")).Value = new string('P', 51);   // max 50
             ws.Cell(2, Col("Txn Ref/ Seq No")).Value = new string('T', 50); // exactly 50: fine
-            ws.Cell(2, Col("Br. Code")).Value = new string('B', 21);       // max 20
+            ws.Cell(2, Col("Br. Code")).Value = new string('B', 51);       // max 50
             ws.Cell(2, Col("CNIC No")).Value = new string('9', 21);        // max 20 digits
             ws.Cell(2, Col("Narration 3")).Value = new string('N', 501);   // max 500
         });
@@ -336,7 +338,7 @@ public class ParserTests : IDisposable
             row.Errors.Select(e => e.Field).OrderBy(x => x));
         Assert.Equal(50, row.PayOrderNo!.Length);
         Assert.Equal(50, row.TxnRefSeqNo!.Length);
-        Assert.Equal(20, row.BranchCode!.Length);
+        Assert.Equal(50, row.BranchCode!.Length);
         Assert.Equal(20, row.Cnic!.Length);
         Assert.Equal(500, row.Narration3!.Length);
     }
@@ -405,6 +407,27 @@ public class NarrationExtractorTests
     [InlineData("42201183643771", null)]                          // 14 digits: part of a longer number
     public void Narration_cnic_is_a_13_digit_number_not_part_of_a_longer_one(string text, string? expected)
         => Assert.Equal(expected, NarrationExtractor.NarrationCnic(text));
+
+    [Theory]
+    [InlineData("1872/CMT XFR (550) P:10843 /Br: 1872 /Doc No:791666069", "1872")]
+    [InlineData("RTGS HBL /Br: 0949 /Doc No:1", "0949")]          // leading zero kept
+    [InlineData("no branch here", null)]
+    public void Branch_code_is_read_from_the_br_marker_in_narration_1(string text, string? expected)
+        => Assert.Equal(expected, NarrationExtractor.BranchCode(text));
+
+    [Fact]
+    public void A_row_with_a_txn_ref_gets_its_branch_from_the_narration_but_no_slip_and_a_cash_row_keeps_its_slip()
+    {
+        var bank = new ImportRow { TxnRefSeqNo = "791666069", Narration1 = "FROM 219035565 TO 209045053 /Br: 1872 /Doc No:12345678" };
+        NarrationExtractor.Apply(bank);
+        Assert.Equal("1872", bank.BranchCode);
+        Assert.Null(bank.SlipNo);
+
+        var cash = new ImportRow { BranchCode = "0786", Narration1 = "H01877056" };
+        NarrationExtractor.Apply(cash);
+        Assert.Equal("0786", cash.BranchCode);          // an existing Br. Code is never overwritten
+        Assert.Equal("01877056", cash.SlipNo);          // the letter prefix is dropped
+    }
 
     [Fact]
     public void Narration_cnic_looks_in_narrations_2_to_5_and_takes_the_first_match()

@@ -44,6 +44,9 @@ public sealed class StagedRow
     public string? Narration5 { get; init; }
     public string? SlipNo { get; init; }
     public string? NarrationCnic { get; init; }
+
+    /// <summary>Why a Possible-duplicate row was flagged: 1 = same slip no., 2 = same date, amount and branch, 3 = same Txn Ref with other values.</summary>
+    public int? MatchReason { get; init; }
 }
 
 /// <summary>One page of staged rows plus the total number of rows with that status.</summary>

@@ -241,6 +241,7 @@ public abstract class StagingStoreBase : IStagingStore
         Narration5 = s.Narration5,
         SlipNo = s.SlipNo,
         NarrationCnic = s.NarrationCnic,
+        MatchReason = s.MatchReason,
     };
 
     private static StagedRow ToStagedRow(Transaction t) => new()

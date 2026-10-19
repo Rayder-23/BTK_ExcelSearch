@@ -107,4 +107,75 @@ public abstract class KeylessContract
         Assert.Equal(0, counts[RowStatus.LikelyDuplicate]);
         Assert.Equal(2, counts[RowStatus.FileDuplicate]);       // repeats inside the file do not depend on the database
     }
+    /// <summary>
+    /// Cash rows (no reference at all): file A has two deposits of 240000 at branch 0786 (slips S1, S2). File B:
+    ///   row 2  same date, amount, branch, NO slip                 -> Possible duplicate, reason 2 (date + amount + branch)
+    ///   row 3  same date, amount, branch, a different slip        -> New (two different slips are two deposits)
+    ///   row 4  same slip S1, date, account, amount (text differs)  -> Possible duplicate, reason 1 (slip)
+    ///   row 5  same date and amount, another branch                -> New
+    ///   row 6  like row 3, same file                              -> New (repeats inside the file are not flagged by this rule)
+    /// </summary>
+    [SkippableFact]
+    public async Task Cash_rows_are_matched_by_date_amount_and_branch_but_not_when_the_slip_numbers_differ()
+    {
+        await using var env = NewEnv();
+        var bank = env.Prefix + "-HBL";
+        var a = await env.StageAsync(new[]
+        {
+            CashRow(2, bank, env.Prefix, "0786", "S0000001", 240000m),
+            CashRow(3, bank, env.Prefix, "0786", "S0000002", 240000m),
+        });
+        Assert.True((await env.Store.CommitAsync(a)).Success);
+
+        var b = await env.StageAsync(new[]
+        {
+            CashRow(2, bank, env.Prefix, "0786", null, 240000m),
+            CashRow(3, bank, env.Prefix, "0786", "S0000003", 240000m),
+            CashRow(4, bank, env.Prefix, "0786", "S0000001", 240000m, narration2: "changed"),
+            CashRow(5, bank, env.Prefix, "0999", null, 240000m),
+            CashRow(6, bank, env.Prefix, "0786", "S0000004", 240000m),
+        });
+
+        var counts = await env.Store.GetCountsAsync(b);
+        Assert.Equal(3, counts[RowStatus.New]);
+        Assert.Equal(2, counts[RowStatus.LikelyDuplicate]);
+        Assert.Equal(0, counts[RowStatus.FileDuplicate]);
+        Assert.Equal((byte?)2, (await env.StagingRowAsync(b, 2)).MatchReason);
+        Assert.Equal((byte?)1, (await env.StagingRowAsync(b, 4)).MatchReason);
+        Assert.Null((await env.StagingRowAsync(b, 3)).MatchReason);
+
+        // Another user deletes file A's rows: nothing is left to match, and the reasons are cleared.
+        await env.DeleteTransactionsOfBatchAsync(a);
+        Assert.True((await env.Store.RefreshAgainstDatabaseAsync(b)).Success);
+        Assert.Equal(5, (await env.Store.GetCountsAsync(b))[RowStatus.New]);
+        Assert.Null((await env.StagingRowAsync(b, 2)).MatchReason);
+    }
+
+    /// <summary>
+    /// Rows with a Txn Ref but no pay order no (UBL): the ref identifies them. File A has txn T1. File B: T1 identical -> Already in
+    /// database; T1 with other text -> Possible duplicate (reason 3); a NEW ref with the same date, amount and branch -> New (a ref
+    /// is never matched by date and amount).
+    /// </summary>
+    [SkippableFact]
+    public async Task Rows_with_only_a_txn_ref_are_recognised_by_that_ref()
+    {
+        await using var env = NewEnv();
+        var bank = env.Prefix + "-UBL";
+        var t1 = env.Key("t1");
+        var a = await env.StageAsync(new[] { CashRow(2, bank, env.Prefix, "1872", null, 5000m, txnRef: t1) });
+        Assert.True((await env.Store.CommitAsync(a)).Success);
+
+        var b = await env.StageAsync(new[]
+        {
+            CashRow(2, bank, env.Prefix, "1872", null, 5000m, txnRef: t1),
+            CashRow(3, bank, env.Prefix, "1872", null, 5000m, txnRef: t1, narration2: "changed"),
+            CashRow(4, bank, env.Prefix, "1872", null, 5000m, txnRef: env.Key("t2")),
+        });
+
+        var counts = await env.Store.GetCountsAsync(b);
+        Assert.Equal(1, counts[RowStatus.ExactDuplicate]);
+        Assert.Equal(1, counts[RowStatus.LikelyDuplicate]);
+        Assert.Equal(1, counts[RowStatus.New]);
+        Assert.Equal((byte?)3, (await env.StagingRowAsync(b, 3)).MatchReason);
+    }
 }

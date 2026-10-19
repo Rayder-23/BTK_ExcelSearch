@@ -192,11 +192,12 @@ public sealed partial class SqliteStagingStore : StagingStoreBase
         //     UPDATE ... FROM cannot LEFT JOIN its own target, so the lookup is a (materialized) subquery carrying the result.
         await db.Database.ExecuteSqlRawAsync(
             "WITH x AS MATERIALIZED (" +
-            "SELECT s.ExcelRowNumber AS RowNo, " + SqliteStatusSql.NewStatus + " AS NewStatus, " + SqliteStatusSql.ExistingHash + " AS Hash " +
-            "FROM ImportStaging AS s " +
+            "SELECT s.ExcelRowNumber AS RowNo, " + SqliteStatusSql.NewStatus + " AS NewStatus, " + SqliteStatusSql.ExistingHash + " AS Hash, " +
+            "CASE WHEN s.R IS NOT NULL AND (" + SqliteStatusSql.NewStatus + ") = 6 THEN s.R END AS Reason " +
+            "FROM (" + SqliteStatusSql.WithReason("s.ImportBatchId = $b AND s.Status = 0") + ") AS s " +
             "LEFT JOIN Transactions AS t ON t.PayOrderNo = s.PayOrderNo AND t.TxnRefSeqNo = s.TxnRefSeqNo " +
             "WHERE s.ImportBatchId = $b AND s.Status = 0) " +
-            "UPDATE ImportStaging SET ExistingRowHash = x.Hash, Status = x.NewStatus FROM x " +
+            "UPDATE ImportStaging SET ExistingRowHash = x.Hash, Status = x.NewStatus, MatchReason = x.Reason FROM x " +
             "WHERE ImportStaging.ImportBatchId = $b AND ImportStaging.ExcelRowNumber = x.RowNo;",
             new[] { new SqliteParameter("$b", batchId) }, ct).ConfigureAwait(false);
     }

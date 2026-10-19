@@ -371,7 +371,31 @@ COMMIT TRANSACTION;
 GO
 
 ------------------------------------------------------------------------------
--- 6. Final check: stop with an error if the database is not in the shape the app needs
+-- 6. (007_cash_matching.sql) BranchCode NVARCHAR(50); ImportStaging.MatchReason; IX_Transactions_Match.
+--    See Docs/KeylessImport.md.
+------------------------------------------------------------------------------
+SET QUOTED_IDENTIFIER ON;
+GO
+
+BEGIN TRANSACTION;
+
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Transactions') AND name = N'BranchCode' AND max_length < 100)
+    ALTER TABLE dbo.Transactions ALTER COLUMN BranchCode NVARCHAR(50) NULL;
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.ImportStaging') AND name = N'BranchCode' AND max_length < 100)
+    ALTER TABLE dbo.ImportStaging ALTER COLUMN BranchCode NVARCHAR(50) NULL;
+
+IF COL_LENGTH(N'dbo.ImportStaging', N'MatchReason') IS NULL
+    ALTER TABLE dbo.ImportStaging ADD MatchReason TINYINT NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Transactions_Match' AND object_id = OBJECT_ID(N'dbo.Transactions'))
+    EXEC (N'CREATE NONCLUSTERED INDEX IX_Transactions_Match
+              ON dbo.Transactions (ValueDate, BranchCode) INCLUDE (Credit, Debit, BankName, SlipNo)');
+
+COMMIT TRANSACTION;
+GO
+
+------------------------------------------------------------------------------
+-- 7. Final check: stop with an error if the database is not in the shape the app needs
 ------------------------------------------------------------------------------
 DECLARE @problems NVARCHAR(MAX) = N'';
 IF NOT EXISTS (SELECT 1 FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
@@ -385,6 +409,8 @@ IF COL_LENGTH(N'dbo.Transactions', N'SlipNo') IS NULL OR COL_LENGTH(N'dbo.Transa
     SET @problems += N' SlipNo / NarrationCnic columns are missing.';
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_Transactions_Key' AND object_id = OBJECT_ID(N'dbo.Transactions') AND is_unique = 1 AND has_filter = 1)
     SET @problems += N' UX_Transactions_Key (filtered unique) is missing.';
+IF COL_LENGTH(N'dbo.ImportStaging', N'MatchReason') IS NULL
+    SET @problems += N' ImportStaging.MatchReason is missing.';
 IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_read_committed_snapshot_on = 1)
     SET @problems += N' READ_COMMITTED_SNAPSHOT is off.';
 IF NOT (CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(128)) LIKE N'%[_]CI[_]%')
@@ -398,7 +424,7 @@ PRINT N'ExcelSearch database is ready.';
 GO
 
 ------------------------------------------------------------------------------
--- 7. Verification (read-only): tables and column counts, indexes, RCSI
+-- 8. Verification (read-only): tables and column counts, indexes, RCSI
 ------------------------------------------------------------------------------
 SELECT t.name AS TableName, COUNT(c.column_id) AS ColumnCount
 FROM sys.tables AS t

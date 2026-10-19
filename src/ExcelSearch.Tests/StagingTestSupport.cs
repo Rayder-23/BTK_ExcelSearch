@@ -367,6 +367,31 @@ public sealed class StagingEnv : IAsyncDisposable
         return row;
     }
 
+    /// <summary>
+    /// A bank-statement row for the cash-matching rules: <paramref name="bank"/> and <paramref name="account"/> should carry the test's
+    /// prefix so nothing outside the test can match it. A UBL-style row has a <paramref name="txnRef"/> (and no pay order no); an HBL
+    /// cash row has none and may have a <paramref name="slip"/>.
+    /// </summary>
+    public static ImportRow CashRow(int excelRow, string bank, string account, string? branch, string? slip, decimal credit,
+        string? txnRef = null, string narration2 = "n2")
+    {
+        var row = new ImportRow
+        {
+            ExcelRowNumber = excelRow,
+            ValueDate = new DateTime(2024, 4, 3),
+            Credit = credit,
+            BankName = bank,
+            AccountNo = account,
+            BranchCode = branch,
+            TxnRefSeqNo = txnRef,
+            Narration1 = slip,
+            Narration2 = narration2,
+            SlipNo = slip,
+        };
+        row.RowHash = RowHasher.Compute(row);
+        return row;
+    }
+
     /// <summary>Removes the Transactions rows a batch committed (simulates another user deleting them).</summary>
     public async Task DeleteTransactionsOfBatchAsync(int batchId)
     {

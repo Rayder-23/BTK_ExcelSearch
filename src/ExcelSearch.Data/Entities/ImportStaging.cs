@@ -79,5 +79,7 @@ public partial class ImportStaging
 
     public string? NarrationCnic { get; set; }
 
+    public byte? MatchReason { get; set; }
+
     public virtual ImportBatch ImportBatch { get; set; } = null!;
 }
