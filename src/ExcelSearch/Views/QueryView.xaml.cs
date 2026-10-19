@@ -94,6 +94,10 @@ public partial class QueryView : UserControl
         // (queued, so it runs after the grid has finished swapping the rows).
         if (e.PropertyName is nameof(QueryViewModel.Sort) or nameof(QueryViewModel.Rows))
             Dispatcher.BeginInvoke(ShowSortArrow, System.Windows.Threading.DispatcherPriority.Loaded);
+
+        // A new page (or sort/search) starts at the top; otherwise the old scroll position carries over.
+        if (e.PropertyName == nameof(QueryViewModel.Rows))
+            Dispatcher.BeginInvoke(() => GridScroll.ToTop(ResultsGrid), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     /// <summary>The arrow in the header template follows DataGridColumn.SortDirection; set it on the active column only.</summary>

@@ -17,8 +17,25 @@ public partial class StatusTabView : UserControl
     public StatusTabView()
     {
         InitializeComponent();
-        DataContextChanged += (_, e) => BuildColumns(e.NewValue as StatusTabViewModel);
+        DataContextChanged += OnDataContextChanged;
         RowsGrid.PreviewMouseLeftButtonDown += OnGridMouseDown;
+    }
+
+    private StatusTabViewModel? _tab;
+
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (_tab is not null) _tab.Rows.CollectionChanged -= OnRowsChanged;
+        _tab = e.NewValue as StatusTabViewModel;
+        if (_tab is not null) _tab.Rows.CollectionChanged += OnRowsChanged;
+        BuildColumns(_tab);
+    }
+
+    /// <summary>A new page replaces the rows (the collection is cleared first): start it at the top.</summary>
+    private void OnRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+            Dispatcher.BeginInvoke(() => GridScroll.ToTop(RowsGrid), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     /// <summary>
