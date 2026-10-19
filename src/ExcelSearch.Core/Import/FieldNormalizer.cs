@@ -116,6 +116,10 @@ internal static class FieldNormalizer
     {
         if (d == Math.Floor(d) && Math.Abs(d) < 1e15)
             return ((long)d).ToString(CultureInfo.InvariantCulture);
+        // Too big for a decimal (or NaN / infinity): never throw on one odd cell, the import must go on. A custom double format
+        // does not use scientific notation either.
+        if (double.IsNaN(d) || double.IsInfinity(d) || Math.Abs(d) >= 7.9e28)
+            return double.IsFinite(d) ? d.ToString("0.###############", CultureInfo.InvariantCulture) : d.ToString(CultureInfo.InvariantCulture);
         // This format never uses scientific notation.
         return ((decimal)d).ToString("0.############################", CultureInfo.InvariantCulture);
     }
