@@ -75,13 +75,35 @@ Order if you go back: roll the databases back first (they must have no key-less 
 
 ## Known gaps
 
-- **24 rows of the real file are rejected** because `Br. Code` is longer than 20 characters (values up to 35 characters: it holds more than a code in those rows). The existing rule is unchanged; the rows can be exported from the Invalid tab and fixed, or `BranchCode` can be widened (a schema change, not made here).
+- ~~24 rows of the first real file were rejected because `Br. Code` was longer than 20 characters.~~ Settled on 2026-10-19: `BranchCode` is now `nvarchar(50)` (see "Cash rows" below).
 - A re-imported file doubles its rows unless "Skip flagged duplicates" is ticked. That is the cost of "import by default". The whole-file hash warning in `ImportBatches.FileHash` is not shown on screen.
 - Genuine identical cash deposits (same day, account, amount, slip and narrations) cannot be told from a re-import: they are flagged, never silently dropped.
 - The slip number and CNIC rules are tuned on one real file and one narration style (HBL statements); other banks may need other rules. They are one small class (`NarrationExtractor`).
 - Rows imported before this change have no `SlipNo` / `NarrationCnic` until re-imported (no backfill).
 - Not verified: a production SQL Server (006 was run on the dev server and on scratch copies only); a case-sensitive database; a Local DB file with millions of rows through the 002 rebuild (tested with a few rows; the copy is one `INSERT ... SELECT`).
 - The two statement samples and the real-file figures above are single-machine, first-run timings.
+
+## Cash rows: UBL and HBL statements (2026-10-19)
+
+A second real file (11,497 rows, two banks) showed two shapes of statement row, and the matching was extended (migration `007_cash_matching.sql` / SQLite `003_cash_matching.sql`; undo with the two rollback scripts):
+
+| | UBL | HBL (cash deposits) |
+|---|---|---|
+| Txn Ref | on every row, unique | none |
+| Pay order | about half the rows | none |
+| Branch | only inside Narration 1 as `/Br: 1872` (the import now copies it into `BranchCode`) | `Br. Code` column (4,823 of 4,874 rows) |
+| Slip no. | none (not extracted for rows with a Txn Ref) | Narration 1 (3,898 rows) |
+
+Rules for a row WITHOUT a full key, in this order (the SQL is in `StatusSql` / `SqliteStatusSql`, change both together):
+1. Same `RowHash` as a database row: Already in database (flagged).
+2. Has a Txn Ref (UBL): a database row with the same Txn Ref, bank and account but other values: Possible duplicate, reason 3. A new Txn Ref is simply New, however well date and amount agree.
+3. No reference (HBL cash): same slip no. + date + account + amounts: Possible duplicate, reason 1. Otherwise same value date + amount + branch code + bank, unless both rows carry different slip numbers: Possible duplicate, reason 2. It is a hint, never a block: it only looks at rows already in the database (inside one file many deposits legitimately share date, amount and branch: 548 such groups, 1,806 rows, in the real file).
+
+The Possible-duplicates tab shows the reason in a "Why flagged" column. Amounts compare as signed values (the HBL sheet has 414 negative credits).
+
+Measured on the real file (not committed; `Samples/software filed*.xlsx` is git-ignored): 11,497 rows, none Invalid; first import all New; importing it again on Local DB: all 11,497 Already in database in 0.5 s, and 'Skip flagged duplicates' imports 0. A cell holding a number too large for a decimal used to crash the whole parse; it is now read as text.
+
+Known limits: the date + amount + branch rule is a hint (a genuine second deposit of the same amount at the same branch on the same day without a slip no. is flagged, not dropped); UBL rows imported before this change have no `BranchCode`; tier 3 was exercised by contract tests and the two real-file runs, not yet on a 500,000-row database (`IX_Transactions_Match` is there for that).
 
 ---
 

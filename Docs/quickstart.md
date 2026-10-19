@@ -70,7 +70,7 @@ variable. If a setting seems ignored, look there.
 ## 5. Set up SQL Server mode (optional)
 
 1. Create the database and tables: run `Scripts/db/init_db.sql` (SSMS, or `sqlcmd -S .\SQLEXPRESS -E -C -i Scripts/db/init_db.sql`).
-   It builds the final schema in one go (scripts 001-004 and 006: `Id` primary key, optional pay order no / txn ref, slip and CNIC
+   It builds the final schema in one go (scripts 001-004, 006 and 007: `Id` primary key, optional pay order no / txn ref, slip and CNIC
    columns, RCSI), is safe to re-run, and ends with its own check: it prints `ExcelSearch database is ready.` or stops with an error
    that says what is missing. It also upgrades a database built by an older version of the scripts. Close other connections first;
    the READ_COMMITTED_SNAPSHOT step disconnects other sessions. (`sqlcmd` needs no extra switch: the script sets `QUOTED_IDENTIFIER`

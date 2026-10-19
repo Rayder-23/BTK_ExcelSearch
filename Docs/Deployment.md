@@ -52,9 +52,10 @@ Run in SQL Server Management Studio or `sqlcmd` (use `-C` to trust the certifica
    The business key `(PayOrderNo, TxnRefSeqNo)` of rows that have both relies on it. If it is `_CS_`, drop the database and recreate it with
    `COLLATE SQL_Latin1_General_CP1_CI_AS`.
 3. Run `Scripts/db/001_create_tables.sql`, then `002_create_staging.sql`, then `003_concurrency.sql`, then `006_surrogate_key.sql`
-   (bank-statement sheets without pay order numbers need it: `Id` becomes the primary key). **An EXISTING production database that
-   was built from 001-004 needs 006 too before this version of the app runs against it** (take a backup first; it is one re-runnable
-   transaction and keeps every row). Undo: `Scripts/db/rollback/006_rollback.sql` (see `Docs/KeylessImport.md`).
+   (bank-statement sheets without pay order numbers need it: `Id` becomes the primary key), then `007_cash_matching.sql` (HBL/UBL cash
+   rows: wider `BranchCode`, `ImportStaging.MatchReason`, a match index). **An EXISTING production database that was built from
+   001-004 needs 006 and 007 too before this version of the app runs against it** (take a backup first; each is one re-runnable
+   transaction and keeps every row). Undo: `Scripts/db/rollback/007_rollback.sql`, then `006_rollback.sql` (see `Docs/KeylessImport.md`).
 4. Run `Scripts/db/004_enable_rcsi.sql` (READ_COMMITTED_SNAPSHOT) **only if no other application uses this database**: it changes how
    every application reading it behaves.
 

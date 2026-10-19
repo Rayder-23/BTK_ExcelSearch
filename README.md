@@ -22,7 +22,7 @@ src/
 ├── ExcelSearch.Data/    class library: EF Core model, SqlServer/ (staging store, query service) and Sqlite/ (staging store, schema initializer)
 └── ExcelSearch.Tests/   xUnit tests (net8.0-windows so it can reference the WPF project)
 Scripts/
-├── db/                  T-SQL: 001-004 numbered scripts, init_db.sql (all of them in one), 005 (draft indexes, not applied); sqlite/ the SQLite schema
+├── db/                  T-SQL: 001-004, 006, 007 numbered scripts, init_db.sql (all of them in one), 005 (draft indexes, not applied); sqlite/ the SQLite schema
 ├── run/                 launcher scripts (run.ps1, run-dev.cmd, run-release.cmd)
 ├── publish.ps1          builds the framework-dependent win-x64 package into publish/ (gitignored)
 └── samples/             make_samples.py - generates the sample workbooks

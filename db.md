@@ -1,5 +1,5 @@
 # ExcelSearch Database Schema
-Version: 1.35 | Last Updated: 2026-10-14
+Version: 1.36 | Last Updated: 2026-10-19
 Database: ExcelSearch
 Server: LOCAL
 
@@ -75,7 +75,7 @@ Business columns (Excel header → column)
 | Column | Type | Null | Excel header | Notes |
 |---|---|---|---|---|
 | ValueDate | date | NOT NULL | Value Date | |
-| BranchCode | nvarchar(20) | NULL | Br. Code | OPEN QUESTION (2026-10-14): 24 of the 50,921 rows of the real statement file are rejected as Invalid because their Br. Code is longer than 20 characters (up to 35; those cells hold more than a code). Decision pending: widen the column or keep rejecting. See the note under Change History. |
+| BranchCode | nvarchar(50) | NULL | Br. Code | Widened from nvarchar(20) on 2026-10-19 (`007_cash_matching.sql`; the question raised on 2026-10-14 is decided). For UBL rows, whose Br. Code column is empty, the import fills it from `/Br: nnnn` in Narration 1. Used with value date and amount to recognise cash rows (`IX_Transactions_Match`). |
 | BranchName | nvarchar(100) | NULL | Branch Name | |
 | RegNo | nvarchar(50) | NULL | Reg No | |
 | ApplicationNo | nvarchar(50) | NULL | Application no | |
@@ -104,6 +104,7 @@ Business columns (Excel header → column)
 Indexes
 - `PK_Transactions` — clustered, (Id). (Until 2026-10-14: clustered on (PayOrderNo, TxnRefSeqNo); `UQ_Transactions_Id` is gone.)
 - `UX_Transactions_Key` — unique, filtered `WHERE PayOrderNo IS NOT NULL AND TxnRefSeqNo IS NOT NULL`, (PayOrderNo, TxnRefSeqNo). Added 2026-10-14. Needs `SET QUOTED_IDENTIFIER ON` in the session that creates it (sqlcmd defaults to OFF; the scripts set it).
+- Added 2026-10-19: `IX_Transactions_Match` (ValueDate, BranchCode) INCLUDE (Credit, Debit, BankName, SlipNo), for the date + amount + branch lookup of cash rows.
 - Added 2026-10-14: `IX_Transactions_PayOrderNo` (PayOrderNo; it used to be the PK's leading column), `IX_Transactions_RowHash` (RowHash), `IX_Transactions_SlipNo` (SlipNo, filtered `IS NOT NULL`), `IX_Transactions_NarrationCnic` (NarrationCnic, filtered `IS NOT NULL`).
 - Non-unique, for the filter screen: `IX_Transactions_TxnRefSeqNo` (TxnRefSeqNo), `IX_Transactions_ValueDate` (ValueDate), `IX_Transactions_Bank_Account` (BankName, AccountNo), `IX_Transactions_Project` (Project), `IX_Transactions_DealerName` (DealerName), `IX_Transactions_CustomerName` (CustomerName), `IX_Transactions_Cnic` (Cnic), `IX_Transactions_ApplicationNo` (ApplicationNo), `IX_Transactions_ChallanNo` (ChallanNo), `IX_Transactions_ImportBatchId` (ImportBatchId).
 
@@ -124,6 +125,7 @@ Every parsed Excel row of a not-yet-committed batch (valid and invalid), so larg
 | RowHash | char(64) | NULL | | SHA-256 hex; NULL when the row failed validation while parsing. |
 | ExistingRowHash | char(64) | NULL | | For Conflict rows: RowHash of the matching `Transactions` row at classification time. Commit compares it with the current hash and aborts if the row changed since the preview. Added 2026-10-09. |
 | SlipNo, NarrationCnic | as in Transactions | NULL | | Added 2026-10-14 by `006_surrogate_key.sql`. |
+| MatchReason | tinyint | NULL | | Added 2026-10-19 by `007_cash_matching.sql`. Set on Status 6 rows: 1 = same slip no. + date + account + amounts, 2 = same value date + amount + branch code (+ bank), a hint only, 3 = same Txn Ref (+ bank + account) with other values. NULL otherwise. |
 | PayOrderNo … Narration5 | as in Transactions | NULL | | Same names, types and sizes as the `Transactions` business columns (ValueDate is date). |
 
 Indexes: `PK_ImportStaging` (clustered, ImportBatchId + ExcelRowNumber); `IX_ImportStaging_Key` (ImportBatchId, PayOrderNo, TxnRefSeqNo); `IX_ImportStaging_Status` (ImportBatchId, Status, ExcelRowNumber).
@@ -198,3 +200,4 @@ class (`TransactionQueryServiceBase`); `SqliteTransactionQueryService` overrides
 - 2026-10-13: Query screen enabled on the Local DB (SQLite). NO schema change and no new index: the 500,000-row run (Docs/Performance.md section 10) had no search over about 1.1 s. The name filter gained a Contains / Starts-with mode (`TransactionFilter.CustomerNameMode`) on both databases; Starts-with can use `IX_Transactions_CustomerName` on SQL Server.
 - 2026-10-14: **Surrogate primary key (key-less import).** Ran `Scripts/db/006_surrogate_key.sql` on the local `ExcelSearch` database (3,040 rows at the time; all kept their keys and values): `Transactions.Id` became the clustered PRIMARY KEY, `PayOrderNo` / `TxnRefSeqNo` became NULLable with a filtered unique index for rows that have both, `SlipNo` / `NarrationCnic` added to `Transactions` and `ImportStaging`, new indexes added (see Indexes). `ImportStaging.Status` gained code 6. Re-run on a copy and on a fresh database built from `init_db.sql` (which now includes 006) with the same result; `Scripts/db/rollback/006_rollback.sql` tested too. SQLite: new `002_surrogate_key.sql` (user_version 2), tested on a version-1 file with data. EF model re-scaffolded. Why and how: `Docs/KeylessImport.md`.
 - 2026-10-14: **Open question, not decided: widen `BranchCode`?** `BranchCode` is `nvarchar(20)` (SQLite: not enforced, but the parser applies the same limit). In the real statement file, 24 of 50,921 rows have a Br. Code of 21-35 characters and are therefore Invalid (the other 50,897 import). No schema change was made, so those rows stay rejected; they can be exported from the Invalid tab and fixed in Excel. If this comes up again, the choices are: (a) leave as is, (b) widen to e.g. `nvarchar(50)` (needs a new numbered SQL Server script, a new numbered SQLite script, a rollback note, `init_db.sql`, the re-scaffolded model, the parser limit in `ExcelParser`/`ImportRow`, the `ImportStaging` column, and this file), or (c) truncate instead of reject (loses text; not recommended). Context: `Docs/KeylessImport.md` > Known gaps.
+- 2026-10-19: **Cash-row recognition (`Scripts/db/007_cash_matching.sql`, SQLite `003_cash_matching.sql` = user_version 3).** New real sample with two bank statements (UBL 6,623 rows with a Txn Ref on every row and a Pay order on about half; HBL 4,874 cash rows with neither). Changes: `BranchCode` widened to nvarchar(50) on `Transactions` and `ImportStaging` (this settles the 2026-10-14 question; SQLite needed no change), `ImportStaging.MatchReason` added, `IX_Transactions_Match` added. Classification (`StatusSql` / `SqliteStatusSql`) now has three tiers: full key (unchanged); Txn Ref only (same bank + account + Txn Ref: same hash = Already in database, other values = Possible duplicate); no reference (same hash; then same slip no.; then same date + amount + branch code, unless both rows have different slip numbers). Possible duplicate rows are still imported unless 'Skip flagged duplicates' is ticked. Applied to the dev database, tested with a rollback (`Scripts/db/rollback/007_rollback.sql`, `003_rollback_sqlite.sql`); `init_db.sql` includes it; EF model re-scaffolded. Details: `Docs/KeylessImport.md` > Cash rows.
