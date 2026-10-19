@@ -68,7 +68,7 @@ END;
 IF OBJECT_ID(N'dbo.ImportStaging', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.ImportStaging
-    (
+(
         -- Identity of the staged row ------------------------------------------
         ImportBatchId     INT           NOT NULL,
         ExcelRowNumber    INT           NOT NULL,   -- 1-based row in the source sheet
@@ -116,13 +116,14 @@ BEGIN
 
         CONSTRAINT PK_ImportStaging PRIMARY KEY CLUSTERED (ImportBatchId, ExcelRowNumber),
         CONSTRAINT FK_ImportStaging_ImportBatches
-            FOREIGN KEY (ImportBatchId) REFERENCES dbo.ImportBatches (Id),
+            FOREIGN KEY (ImportBatchId) REFERENCES dbo.ImportBatches (Id)
 
         -- Join to dbo.Transactions and find repeats inside the file
-        INDEX IX_ImportStaging_Key    NONCLUSTERED (ImportBatchId, PayOrderNo, TxnRefSeqNo),
+
         -- Preview screen: page through one status at a time, and count per status
-        INDEX IX_ImportStaging_Status NONCLUSTERED (ImportBatchId, Status, ExcelRowNumber)
     );
+    CREATE NONCLUSTERED INDEX IX_ImportStaging_Key ON dbo.ImportStaging (ImportBatchId, PayOrderNo, TxnRefSeqNo);
+    CREATE NONCLUSTERED INDEX IX_ImportStaging_Status ON dbo.ImportStaging (ImportBatchId, Status, ExcelRowNumber);
 END;
 
 COMMIT TRANSACTION;

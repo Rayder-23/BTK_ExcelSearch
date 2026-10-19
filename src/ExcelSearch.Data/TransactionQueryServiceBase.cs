@@ -54,12 +54,19 @@ public abstract class TransactionQueryServiceBase : ITransactionQueryService
     protected virtual Expression<Func<Transaction, bool>> AnyOf(Expression<Func<Transaction, string?>> column, IReadOnlyList<string> values) =>
         AnyOfCore(column.Body, column.Parameters, values);
 
-    /// <summary>Builds <c>values.Contains(operand)</c> with the array as a query parameter.</summary>
+    /// <summary>
+    /// Builds <c>operand == v1 || operand == v2 ...</c>, each value its own query parameter. (<c>values.Contains(operand)</c> would be one
+    /// parameter on SQL Server 2016+, but on SQL Server 2012 - EF compatibility level 110 - EF writes the values into the SQL text.)
+    /// </summary>
     protected static Expression<Func<Transaction, bool>> AnyOfCore(Expression operand, IReadOnlyList<ParameterExpression> parameters, IReadOnlyList<string> values)
     {
-        var array = Expression.Field(Expression.Constant(new Box<string[]>(values.ToArray())), nameof(Box<string[]>.Value));
-        var contains = Expression.Call(typeof(Enumerable), nameof(Enumerable.Contains), new[] { typeof(string) }, array, operand);
-        return Expression.Lambda<Func<Transaction, bool>>(contains, parameters);
+        Expression? any = null;
+        foreach (var value in values)
+        {
+            var equal = Expression.Equal(operand, Param(value));
+            any = any is null ? equal : Expression.OrElse(any, equal);
+        }
+        return Expression.Lambda<Func<Transaction, bool>>(any ?? Expression.Constant(false), parameters);
     }
 
     /// <summary>ORDER BY on a text column in the same (case-insensitive) order SQL Server gives.</summary>

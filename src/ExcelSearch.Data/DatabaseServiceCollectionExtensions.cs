@@ -33,7 +33,9 @@ public static class DatabaseServiceCollectionExtensions
                 break;
 
             default:
-                services.AddDbContextFactory<AppDbContext>(options => options.UseSqlServer(sqlServerConnectionString));
+                services.AddDbContextFactory<AppDbContext>(options => 
+                    // Compatibility level 110 = SQL Server 2012: list filters become IN (...) instead of OPENJSON (2016+).
+                    options.UseSqlServer(sqlServerConnectionString, sql => sql.UseCompatibilityLevel(110)));
                 services.AddSingleton<IStagingStore, SqlServerStagingStore>();
                 services.AddSingleton<ITransactionQueryService, SqlTransactionQueryService>();
                 break;

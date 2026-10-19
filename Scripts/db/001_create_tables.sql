@@ -66,7 +66,7 @@ BEGIN TRANSACTION;
 IF OBJECT_ID(N'dbo.ImportBatches', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.ImportBatches
-    (
+(
         Id            INT IDENTITY(1,1) NOT NULL,
         FileName      NVARCHAR(260)     NOT NULL,
         SheetName     NVARCHAR(100)     NULL,
@@ -79,9 +79,9 @@ BEGIN
         UpdatedRows   INT               NOT NULL CONSTRAINT DF_ImportBatches_UpdatedRows  DEFAULT 0,  -- conflicts the user chose to overwrite
         RejectedRows  INT               NOT NULL CONSTRAINT DF_ImportBatches_RejectedRows DEFAULT 0,  -- invalid rows not imported
 
-        CONSTRAINT PK_ImportBatches PRIMARY KEY CLUSTERED (Id),
-        INDEX IX_ImportBatches_FileHash NONCLUSTERED (FileHash)
+        CONSTRAINT PK_ImportBatches PRIMARY KEY CLUSTERED (Id)
     );
+    CREATE NONCLUSTERED INDEX IX_ImportBatches_FileHash ON dbo.ImportBatches (FileHash);
 END;
 
 ------------------------------------------------------------------------------
@@ -90,7 +90,7 @@ END;
 IF OBJECT_ID(N'dbo.Transactions', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.Transactions
-    (
+(
         -- Keys ---------------------------------------------------------------
         PayOrderNo        NVARCHAR(50)     NOT NULL,
         TxnRefSeqNo       NVARCHAR(50)     NOT NULL,
@@ -140,21 +140,21 @@ BEGIN
         CONSTRAINT PK_Transactions PRIMARY KEY CLUSTERED (PayOrderNo, TxnRefSeqNo),
         CONSTRAINT UQ_Transactions_Id UNIQUE NONCLUSTERED (Id),
         CONSTRAINT FK_Transactions_ImportBatches
-            FOREIGN KEY (ImportBatchId) REFERENCES dbo.ImportBatches (Id),
+            FOREIGN KEY (ImportBatchId) REFERENCES dbo.ImportBatches (Id)
 
         -- Indexes for the filter screen --------------------------------------
         -- (PayOrderNo is already covered by the leading column of the PK)
-        INDEX IX_Transactions_TxnRefSeqNo   NONCLUSTERED (TxnRefSeqNo),
-        INDEX IX_Transactions_ValueDate     NONCLUSTERED (ValueDate),
-        INDEX IX_Transactions_Bank_Account  NONCLUSTERED (BankName, AccountNo),
-        INDEX IX_Transactions_Project       NONCLUSTERED (Project),
-        INDEX IX_Transactions_DealerName    NONCLUSTERED (DealerName),
-        INDEX IX_Transactions_CustomerName  NONCLUSTERED (CustomerName),
-        INDEX IX_Transactions_Cnic          NONCLUSTERED (Cnic),
-        INDEX IX_Transactions_ApplicationNo NONCLUSTERED (ApplicationNo),
-        INDEX IX_Transactions_ChallanNo     NONCLUSTERED (ChallanNo),
-        INDEX IX_Transactions_ImportBatchId NONCLUSTERED (ImportBatchId)
     );
+    CREATE NONCLUSTERED INDEX IX_Transactions_TxnRefSeqNo ON dbo.Transactions (TxnRefSeqNo);
+    CREATE NONCLUSTERED INDEX IX_Transactions_ValueDate ON dbo.Transactions (ValueDate);
+    CREATE NONCLUSTERED INDEX IX_Transactions_Bank_Account ON dbo.Transactions (BankName, AccountNo);
+    CREATE NONCLUSTERED INDEX IX_Transactions_Project ON dbo.Transactions (Project);
+    CREATE NONCLUSTERED INDEX IX_Transactions_DealerName ON dbo.Transactions (DealerName);
+    CREATE NONCLUSTERED INDEX IX_Transactions_CustomerName ON dbo.Transactions (CustomerName);
+    CREATE NONCLUSTERED INDEX IX_Transactions_Cnic ON dbo.Transactions (Cnic);
+    CREATE NONCLUSTERED INDEX IX_Transactions_ApplicationNo ON dbo.Transactions (ApplicationNo);
+    CREATE NONCLUSTERED INDEX IX_Transactions_ChallanNo ON dbo.Transactions (ChallanNo);
+    CREATE NONCLUSTERED INDEX IX_Transactions_ImportBatchId ON dbo.Transactions (ImportBatchId);
 END;
 
 COMMIT TRANSACTION;

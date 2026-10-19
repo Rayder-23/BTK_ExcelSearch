@@ -109,12 +109,14 @@ public sealed partial class SqlServerStagingStore : StagingStoreBase
             SET Status = CASE WHEN g.MinHash = g.MaxHash THEN 4 ELSE 1 END,
                 ErrorText = CASE WHEN g.MinHash = g.MaxHash THEN NULL ELSE LEFT(
                     N'Same PayOrderNo + TxnRefSeqNo as row(s) ' + (
-                        SELECT STRING_AGG(CAST(o.ExcelRowNumber AS NVARCHAR(10)), N', ')
-                               WITHIN GROUP (ORDER BY o.ExcelRowNumber)
-                        FROM dbo.ImportStaging AS o
-                        WHERE o.ImportBatchId = {batchId}
-                          AND o.PayOrderNo = g.PayOrderNo AND o.TxnRefSeqNo = g.TxnRefSeqNo
-                          AND o.ExcelRowNumber <> g.ExcelRowNumber)
+                        -- FOR XML PATH instead of STRING_AGG (2017+): the app must also run on SQL Server 2012
+                        SELECT STUFF((SELECT N', ' + CAST(o.ExcelRowNumber AS NVARCHAR(10))
+                                      FROM dbo.ImportStaging AS o
+                                      WHERE o.ImportBatchId = {batchId}
+                                        AND o.PayOrderNo = g.PayOrderNo AND o.TxnRefSeqNo = g.TxnRefSeqNo
+                                        AND o.ExcelRowNumber <> g.ExcelRowNumber
+                                      ORDER BY o.ExcelRowNumber
+                                      FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N''))
                     + N' in this file, but the values differ', {ErrorTextMax}) END
             FROM dbo.ImportStaging AS s
             JOIN g ON g.ExcelRowNumber = s.ExcelRowNumber
