@@ -1,7 +1,7 @@
 ---
 title: ExcelSearch Performance Report
-version: 1.5
-last_updated: 2026-10-13
+version: 1.7
+last_updated: 2026-10-19
 status: current
 scope: Excel import pipeline (parse, stage, classify, commit) on SQL Server and on local SQLite, invalid-row export, reader latency, Query screen searches (SQL Server), re-check and conflict paging
 benchmark_file: synthetic workbook, 200,000 rows, TEST_ keys only
@@ -323,6 +323,45 @@ What to take from it: the SQL Server figures did not move. The SQLite commit got
 seconds for tens of thousands of rows (the real file commits in 3 s). If SQLite commit time matters, the first thing to try is dropping `IX_Transactions_RowHash`
 and relying on `SlipNo`, but nothing was changed.
 
+## 12. SQL Server 2012 production server (200,000-row tests), 2026-10-19
+
+The app was made to run on SQL Server 2012 (`STRING_AGG` replaced, EF `UseCompatibilityLevel(110)`, indexes created outside `CREATE TABLE`, multi-select filters as ORed
+parameters; see `db.md`). The new production server is **SQL Server 2012 Express (11.0.2100) on another machine, `192.168.8.10`, reached over the LAN**, database
+`AuditExcel`, empty before the run. The dev server is the local SQL Server Express used in sections 1-11. Same PC, same Debug test build, same synthetic 200,000-row
+workbook, same day, tests run one after the other (`EXCELSEARCH_RUN_LARGE=1`; filter: the three 200,000-row SQL Server tests). The 500,000-row Query tests were NOT run.
+
+Tests first: Unit 265 passed; Integration 79 passed on the 2012 server and 79 on the dev server (parallel and serial runs on the 2012 server).
+
+| Step (200,000 rows) | Dev server (local) | 2012 server (LAN) |
+|---|---|---|
+| Parse alone | 7.1 s | 6.2 s |
+| Load into staging (parse + insert) | 13.8 s (14,548 rows/s); 11.6-11.8 s in the commit test | **50-53 s (3,749-3,974 rows/s)** |
+| Of which the insert only | about 6.7 s | **about 47 s** |
+| Classify | 10.4 s (13.2 s for the repeat file) | 7.5-7.6 s (12.8 s for the repeat file) |
+| Commit | 17.2 s | **57.0 s** |
+| Same file again: load + classify, all 200,000 Already in database | 11.6 s + 13.2 s | 52.3 s + 12.8 s |
+| `SELECT COUNT(*)` while the commit runs | 0.023-0.036 s | 0.004-0.059 s (not blocked; value 0 because uncommitted rows are invisible) |
+| Export of 100,000 invalid rows | 6.0 s, +19 MB | 7.4 s, +12 MB |
+| Working-set growth | +1 to +42 MB | +9 to +43 MB |
+
+What the table says:
+- Everything that runs inside the database (classify, the repeat-file classify) is as fast on the 2012 server as locally, and reading while a commit runs is not blocked
+  (READ_COMMITTED_SNAPSHOT is on there).
+- What is slower is whatever moves rows over the network: the bulk insert is about 7x slower and the commit about 3x slower. The commit runs inside the server, so its time is
+  the 2012 Express machine's disk and CPU (and 10 GB / 1 GB-memory Express limits), not the network. The load is limited by the network and the old server together. A file of
+  about 50,000 rows (the real statements) would take roughly a quarter of these times; this was not measured.
+- Not separated: how much of the gap is the server's hardware, how much SQL Server 2012, and how much the LAN. The tests do not tell them apart.
+- Measured once each (the commit test twice, see below); run-to-run noise is 10-25% or more on a network.
+
+Two things seen during the run:
+- **TLS 1.0.** The driver printed "the negotiated TLS 1.0 is an insecure protocol" for the connection to this server. The original 2012 release does not offer TLS 1.2. Data
+  (including the `sa` password exchange) is encrypted only with the old protocol. Applying the SQL Server 2012 service pack (SP4) on that server, or putting the server on a
+  trusted network segment, fixes or reduces it. No app change.
+- **One dropped connection.** The first 200,000-row commit test failed with "A transport-level error has occurred when receiving results from the server (Physical
+  connection is not usable)" during the bulk load of stage #1, after about 80 s. The same test passed when run again alone (3 min 52 s). Cause not established (network or
+  server); treat a long bulk load over this link as able to fail, in which case the batch stays Staged and the file can be loaded again. The failed run left one empty Staged batch
+  in the table, which was deleted by hand.
+
 ## Version history
 
 | Version | Date | Change |
@@ -334,3 +373,4 @@ and relying on `SlipNo`, but nothing was changed.
 | 1.4 | 2026-10-13 | Added section 9: the local SQLite provider (200,000-row load, classify, commit, memory, reader latency), the `WITHOUT ROWID` measurement (not used) and the ordered-insert measurement (not applied). SQL Server figures not re-measured. |
 | 1.5 | 2026-10-13 | Added section 10: the Query screen on SQLite at 500,000 rows next to the SQL Server figures; no index proposed (nothing over about 1.1 s). |
 | 1.6 | 2026-10-14 | Added section 11: the surrogate-key change (more indexes), SQL Server unchanged, SQLite commit about 2x slower, and the real key-less statement file end to end. |
+| 1.7 | 2026-10-19 | Added section 12: the 200,000-row import tests on the SQL Server 2012 production server next to the dev server (load 3.7x, commit 3.3x slower; classify unchanged), the TLS 1.0 warning and one dropped connection. |
