@@ -489,4 +489,4 @@ appsettings.Production.json
 .claude/settings.local
 
 # Real bank data, never commit
-Samples/software filed (1).xlsx
+Samples/software filed*.xlsx
