@@ -10,9 +10,9 @@ public interface IImportPreviewService
     Task<StageResult> StageFileAsync(string path, string? importedBy, IProgress<int>? progress,
         CancellationToken ct = default);
 
-    /// <summary>One page (1-based) of the batch's rows with the given status.</summary>
+    /// <summary>One page (1-based) of the batch's rows with the given status, sorted over the whole status (default: file order).</summary>
     Task<PagedRows> GetPageAsync(int batchId, RowStatus status, int pageNumber, int pageSize,
-        CancellationToken ct = default);
+        StagedSort sort = default, CancellationToken ct = default);
 
     Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite, IReadOnlyCollection<int>? excelRowNumbers = null,
         CancellationToken ct = default);
@@ -24,7 +24,8 @@ public interface IImportPreviewService
     Task<CleanupResult> CleanupStaleBatchesAsync(CancellationToken ct = default);
 
     /// <summary>One page (1-based) of Conflict rows with what differs from the row already in the database.</summary>
-    Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, CancellationToken ct = default);
+    Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, StagedSort sort = default,
+        CancellationToken ct = default);
 
     Task<IReadOnlyDictionary<RowStatus, int>> GetCountsAsync(int batchId, CancellationToken ct = default);
 

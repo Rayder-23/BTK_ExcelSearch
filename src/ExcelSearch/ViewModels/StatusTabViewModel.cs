@@ -8,8 +8,29 @@ namespace ExcelSearch.ViewModels;
 /// <summary>How a grid cell is drawn: text, monospaced (keys), monospaced right-aligned (amounts), an error message, or the Overwrite checkbox.</summary>
 public enum ColumnKind { Text, Mono, Number, Error, Overwrite }
 
-/// <summary>One grid column: header text, the PreviewRow property path it shows, an optional format, and a width.</summary>
-public sealed record GridColumn(string Header, string Path, ColumnKind Kind = ColumnKind.Text, string? Format = null, double Width = 0);
+/// <summary>
+/// One grid column: header text, the PreviewRow property path it shows, an optional format, and a width. <paramref name="Sort"/> is the
+/// whitelisted server-side sort column (null: the column cannot be sorted, e.g. what the comparison with the database produces).
+/// <paramref name="Optional"/> columns are listed in the Columns picker and shown when <paramref name="DefaultVisible"/> says so;
+/// the others (row number, error, overwrite, ...) are always shown.
+/// </summary>
+public sealed record GridColumn(string Header, string Path, ColumnKind Kind = ColumnKind.Text, string? Format = null, double Width = 0,
+    StagedColumn? Sort = null, bool Optional = false, bool DefaultVisible = true);
+
+/// <summary>One entry of the preview's "Columns" picker: a grid column and whether it is currently shown.</summary>
+public sealed partial class GridColumnChoice : ObservableObject
+{
+    public GridColumnChoice(GridColumn column)
+    {
+        Column = column;
+        _isVisible = column.DefaultVisible;
+    }
+
+    public GridColumn Column { get; }
+    public string Header => Column.Header;
+
+    [ObservableProperty] private bool _isVisible;
+}
 
 /// <summary>
 /// One grid row. Every tab shows the staged row; the Conflict tab also carries what differs from the database and the
@@ -84,6 +105,7 @@ public partial class StatusTabViewModel : ObservableObject
         Title = title;
         Count = count;
         Columns = BuildColumns(status);
+        ColumnChoices = Columns.Where(c => c.Optional).Select(c => new GridColumnChoice(c)).ToArray();
         Hint = HintFor(status);
         ConflictTotal = status == RowStatus.Conflict ? count : 0;
     }
@@ -92,6 +114,39 @@ public partial class StatusTabViewModel : ObservableObject
     public string Title { get; }
     public int Count { get; }
     public IReadOnlyList<GridColumn> Columns { get; }
+
+    /// <summary>The columns of the "Columns" picker (every optional column), in grid order.</summary>
+    public IReadOnlyList<GridColumnChoice> ColumnChoices { get; }
+
+    /// <summary>The "All" link in the Columns picker.</summary>
+    [RelayCommand]
+    private void ShowAllColumns()
+    {
+        foreach (var c in ColumnChoices) c.IsVisible = true;
+    }
+
+    /// <summary>The "Default" link in the Columns picker: back to the everyday columns.</summary>
+    [RelayCommand]
+    private void ResetColumns()
+    {
+        foreach (var c in ColumnChoices) c.IsVisible = c.Column.DefaultVisible;
+    }
+
+    /// <summary>The order of the rows on screen (default: file order). Applies to the whole status, not just the page.</summary>
+    [ObservableProperty] private StagedSort _sort;
+
+    /// <summary>
+    /// A header was clicked. Only names from the <see cref="StagedColumn"/> list that this tab shows as sortable are accepted.
+    /// The same column twice flips the direction. The whole status is re-sorted on the server, then page 1 is shown.
+    /// </summary>
+    public void SortBy(string? columnName)
+    {
+        if (!Enum.TryParse<StagedColumn>(columnName, out var column) || !Enum.IsDefined(column)) return;
+        if (!Columns.Any(c => c.Sort == column)) return;
+
+        Sort = Sort.Column == column ? new StagedSort(column, !Sort.Descending) : new StagedSort(column, Descending: false);
+        if (IsLoaded) _ = LoadPageAsync(1);
+    }
 
     /// <summary>One sentence under the tab explaining what these rows are and what happens to them.</summary>
     public string Hint { get; }
@@ -218,13 +273,13 @@ public partial class StatusTabViewModel : ObservableObject
             if (Status == RowStatus.Conflict)
             {
                 // Conflicts come with the existing database row compared column by column, and each row's Overwrite flag.
-                var result = await _service.GetConflictPageAsync(_batchId, page, PageSize);
+                var result = await _service.GetConflictPageAsync(_batchId, page, PageSize, Sort);
                 rows = result.Rows.Select(c => new PreviewRow(c.Incoming, c)).ToList();
                 total = result.Total;
             }
             else
             {
-                var result = await _service.GetPageAsync(_batchId, Status, page, PageSize);
+                var result = await _service.GetPageAsync(_batchId, Status, page, PageSize, Sort);
                 rows = result.Rows.Select(r => new PreviewRow(r)).ToList();
                 total = result.Total;
             }
@@ -275,44 +330,73 @@ public partial class StatusTabViewModel : ObservableObject
     };
 
     // ExcelRowNumber first everywhere; ErrorText right after it on the Invalid tab. Slip numbers, keys and amounts are monospaced
-    // so digits line up; the Conflict tab shows the Overwrite checkbox, the pay order no + txn ref and what differs.
-    // The other tabs show what identifies a statement row: slip number, narration 1, amounts (most rows have no pay order no).
+    // so digits line up. Every field of the staged row can be shown through the Columns picker; the defaults are what identifies a
+    // statement row: date, slip no, txn ref, customer, amounts, bank, branch code, narration 1 (most rows have no pay order no).
+    // The Conflict tab defaults to the pay order no + txn ref, then the comparison with the database. Every column sorts on the
+    // server except the two that come out of that comparison (Changes, What differs).
     private static IReadOnlyList<GridColumn> BuildColumns(RowStatus status)
     {
+        var conflict = status == RowStatus.Conflict;
         var cols = new List<GridColumn>
         {
-            new("Row", "Row.ExcelRowNumber", ColumnKind.Number, Width: 64),
+            new("Row", "Row.ExcelRowNumber", ColumnKind.Number, Width: 64, Sort: StagedColumn.ExcelRowNumber),
         };
 
         if (status == RowStatus.Invalid)
-            cols.Add(new("Error", "Row.ErrorText", ColumnKind.Error, Width: 420));
+            cols.Add(new("Error", "Row.ErrorText", ColumnKind.Error, Width: 420, Sort: StagedColumn.ErrorText));
 
-        if (status == RowStatus.Conflict)
-            cols.Add(new("Overwrite", nameof(PreviewRow.IsOverwrite), ColumnKind.Overwrite, Width: 112));
-
-        if (status == RowStatus.Conflict)
-        {
-            cols.Add(new("Pay order no", "Row.PayOrderNo", ColumnKind.Mono, Width: 150));
-            cols.Add(new("Txn ref", "Row.TxnRefSeqNo", ColumnKind.Mono, Width: 90));
-            cols.Add(new("Changes", "Conflict.ChangeCount", ColumnKind.Number, Width: 96));
-            cols.Add(new("What differs", "Conflict.Summary", ColumnKind.Text, Width: 560));
-            return cols;
-        }
+        if (conflict)
+            cols.Add(new("Overwrite", nameof(PreviewRow.IsOverwrite), ColumnKind.Overwrite, Width: 112, Sort: StagedColumn.Overwrite));
 
         if (status == RowStatus.LikelyDuplicate)
-            cols.Add(new("Why flagged", nameof(PreviewRow.MatchReasonText), ColumnKind.Text, Width: 250));
+            cols.Add(new("Why flagged", nameof(PreviewRow.MatchReasonText), ColumnKind.Text, Width: 250, Sort: StagedColumn.MatchReason));
 
-        cols.AddRange(new GridColumn[]
+        // A picker column; shown by default on every tab but the Conflict tab, which shows its own short list.
+        GridColumn Pick(string header, string property, StagedColumn sort, ColumnKind kind, double width, bool everyday,
+            bool conflictDefault = false, string? format = null) =>
+            new(header, "Row." + property, kind, format, width, sort, Optional: true, DefaultVisible: conflict ? conflictDefault : everyday);
+
+        cols.AddRange(new[]
         {
-            new("Value date", "Row.ValueDate", ColumnKind.Mono, "dd-MMM-yyyy", 110),
-            new("Slip no", "Row.SlipNo", ColumnKind.Mono, Width: 100),
-            new("Customer", "Row.CustomerName", ColumnKind.Text, Width: 190),
-            new("Debit", "Row.Debit", ColumnKind.Number, "N2", 120),
-            new("Credit", "Row.Credit", ColumnKind.Number, "N2", 120),
-            new("Bank", "Row.BankName", ColumnKind.Text, Width: 140),
-            new("Br. code", "Row.BranchCode", ColumnKind.Mono, Width: 80),
-            new("Narration 1", "Row.Narration1", ColumnKind.Text, Width: 220),
+            Pick("Value date", nameof(StagedRow.ValueDate), StagedColumn.ValueDate, ColumnKind.Mono, 110, true, format: "dd-MMM-yyyy"),
+            Pick("Slip no", nameof(StagedRow.SlipNo), StagedColumn.SlipNo, ColumnKind.Mono, 100, true),
+            Pick("Pay order no", nameof(StagedRow.PayOrderNo), StagedColumn.PayOrderNo, ColumnKind.Mono, 150, false, true),
+            Pick("Txn ref", nameof(StagedRow.TxnRefSeqNo), StagedColumn.TxnRefSeqNo, ColumnKind.Mono, 110, true, true),
+            Pick("Customer", nameof(StagedRow.CustomerName), StagedColumn.CustomerName, ColumnKind.Text, 190, true),
+            Pick("Debit", nameof(StagedRow.Debit), StagedColumn.Debit, ColumnKind.Number, 120, true, format: "N2"),
+            Pick("Credit", nameof(StagedRow.Credit), StagedColumn.Credit, ColumnKind.Number, 120, true, format: "N2"),
+            Pick("Bank", nameof(StagedRow.BankName), StagedColumn.BankName, ColumnKind.Text, 140, true),
+            Pick("Br. code", nameof(StagedRow.BranchCode), StagedColumn.BranchCode, ColumnKind.Mono, 80, true),
+            Pick("Narration 1", nameof(StagedRow.Narration1), StagedColumn.Narration1, ColumnKind.Text, 220, true),
+
+            // Hidden until ticked in the Columns picker.
+            Pick("CNIC", nameof(StagedRow.Cnic), StagedColumn.Cnic, ColumnKind.Mono, 130, false),
+            Pick("Application no", nameof(StagedRow.ApplicationNo), StagedColumn.ApplicationNo, ColumnKind.Mono, 130, false),
+            Pick("Reg no", nameof(StagedRow.RegNo), StagedColumn.RegNo, ColumnKind.Mono, 100, false),
+            Pick("Account no", nameof(StagedRow.AccountNo), StagedColumn.AccountNo, ColumnKind.Mono, 140, false),
+            Pick("Project", nameof(StagedRow.Project), StagedColumn.Project, ColumnKind.Text, 140, false),
+            Pick("Dealer", nameof(StagedRow.DealerName), StagedColumn.DealerName, ColumnKind.Text, 150, false),
+            Pick("Branch", nameof(StagedRow.BranchName), StagedColumn.BranchName, ColumnKind.Text, 140, false),
+            Pick("Down payment", nameof(StagedRow.DownPaymentAmount), StagedColumn.DownPaymentAmount, ColumnKind.Number, 128, false, format: "N2"),
+            Pick("Challan no", nameof(StagedRow.ChallanNo), StagedColumn.ChallanNo, ColumnKind.Mono, 110, false),
+            Pick("Cheque / inst no", nameof(StagedRow.ChequeInstNo), StagedColumn.ChequeInstNo, ColumnKind.Mono, 130, false),
+            Pick("Data source", nameof(StagedRow.DataSource), StagedColumn.DataSource, ColumnKind.Text, 130, false),
+            Pick("Running balance", nameof(StagedRow.RunningBalance), StagedColumn.RunningBalance, ColumnKind.Number, 130, false, format: "N2"),
+            Pick("Discount", nameof(StagedRow.Discount), StagedColumn.Discount, ColumnKind.Number, 100, false, format: "N2"),
+            Pick("Plot no", nameof(StagedRow.PlotNo), StagedColumn.PlotNo, ColumnKind.Mono, 90, false),
+            Pick("Street no", nameof(StagedRow.StreetNo), StagedColumn.StreetNo, ColumnKind.Mono, 90, false),
+            Pick("Narration 2", nameof(StagedRow.Narration2), StagedColumn.Narration2, ColumnKind.Text, 240, false),
+            Pick("Narration 3", nameof(StagedRow.Narration3), StagedColumn.Narration3, ColumnKind.Text, 240, false),
+            Pick("Narration 4", nameof(StagedRow.Narration4), StagedColumn.Narration4, ColumnKind.Text, 240, false),
+            Pick("Narration 5", nameof(StagedRow.Narration5), StagedColumn.Narration5, ColumnKind.Text, 240, false),
+            Pick("CNIC in narration", nameof(StagedRow.NarrationCnic), StagedColumn.NarrationCnic, ColumnKind.Mono, 140, false),
         });
+
+        if (conflict)
+        {
+            cols.Add(new("Changes", "Conflict.ChangeCount", ColumnKind.Number, Width: 96));
+            cols.Add(new("What differs", "Conflict.Summary", ColumnKind.Text, Width: 560));
+        }
         return cols;
     }
 }

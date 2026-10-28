@@ -18,7 +18,7 @@
     </UserControl.Resources>
 
     <!-- DataContext is the ImportViewModel (set by the DataTemplate in MainWindow); {Binding X} reads its property X. -->
-    <Grid Margin="32,28,32,24">
+    <Grid Margin="28,18,28,14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -26,7 +26,7 @@
 
         <!-- Message banner (file rejected, commit failed, cancelled...). -->
         <Border Grid.Row="0" Background="{StaticResource AmberTintBrush}" BorderBrush="{StaticResource AmberBrush}"
-                BorderThickness="4,0,0,0" CornerRadius="4" Padding="16,12" Margin="0,0,0,18"
+                BorderThickness="4,0,0,0" CornerRadius="4" Padding="16,10" Margin="0,0,0,12"
                 Visibility="{Binding HasMessage, Converter={StaticResource BoolToVis}}" AutomationProperties.AutomationId="MessageBanner">
             <!-- Stays until the user closes it (no timer): messages can arrive after a long unattended import. -->
             <DockPanel>
@@ -92,21 +92,22 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <DockPanel Grid.Row="0" Margin="0,0,0,14">
+                <DockPanel Grid.Row="0" Margin="0,0,0,8">
                     <!-- Others may have imported since this preview was made: compare the rows with the database again. -->
                     <Button DockPanel.Dock="Right" Content="Re-check against database" Command="{Binding RefreshCommand}"
                             VerticalAlignment="Center" Style="{StaticResource SecondaryButton}"
                             ToolTip="Compare the staged rows with the database as it is now and update the counts"
                             AutomationProperties.AutomationId="RefreshButton" />
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="{Binding FileName}" Style="{StaticResource Heading}" FontSize="24" AutomationProperties.AutomationId="PreviewFileName" />
-                        <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Bottom" Margin="16,0,0,4"
+                        <TextBlock Text="{Binding FileName}" Style="{StaticResource Heading}" FontSize="20" AutomationProperties.AutomationId="PreviewFileName" />
+                        <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Bottom" Margin="14,0,0,3"
                                    Text="{Binding TotalRows, StringFormat={}{0:N0} rows read from the file}" />
                     </StackPanel>
                 </DockPanel>
 
                 <!-- Summary cards: the colour says what happens to those rows. -->
-                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,16">
+                <!-- Six equal tiles that share the row, so they always fit the window (a plain horizontal stack ran off the right edge). -->
+                <UniformGrid Grid.Row="1" Rows="1" Margin="0,0,-12,10">
                     <views:SummaryCard Value="{Binding NewCount}" Label="New" Caption="will be imported"
                                        Accent="{StaticResource GreenBrush}" AutomationProperties.AutomationId="CardNew" />
                     <views:SummaryCard Value="{Binding ConflictCount}" Label="Conflicts" Caption="differ from the database"
@@ -117,9 +118,9 @@
                                        Accent="{StaticResource SlateBrush}" AutomationProperties.AutomationId="CardExact" />
                     <views:SummaryCard Value="{Binding FileDuplicateCount}" Label="Repeated in file" Caption="extra copies, flagged"
                                        Accent="{StaticResource SlateBrush}" AutomationProperties.AutomationId="CardFileDup" />
-                    <views:SummaryCard Value="{Binding LikelyDuplicateCount}" Label="Possible duplicates" Caption="same slip and amount, flagged"
+                    <views:SummaryCard Value="{Binding LikelyDuplicateCount}" Label="Possible duplicates" Caption="may be the same, flagged"
                                        Accent="{StaticResource SlateBrush}" AutomationProperties.AutomationId="CardLikelyDup" />
-                </StackPanel>
+                </UniformGrid>
 
                 <!-- One tab per status. ItemsSource = a list of tab ViewModels (like @foreach over a model collection);
                      each tab body is a StatusTabView whose DataContext is that tab's ViewModel. -->
@@ -143,7 +144,9 @@
                     </TabControl.ContentTemplate>
                 </TabControl>
 
-                <DockPanel Grid.Row="3" Margin="0,18,0,0" LastChildFill="False">
+                <!-- One bar under the grid: paging of the open tab on the left, then the export of the Invalid tab, and the
+                     decisions (skip flagged, Discard, Import) on the right. -->
+                <DockPanel Grid.Row="3" Margin="0,10,0,0" LastChildFill="False">
                     <Button DockPanel.Dock="Right" Content="{Binding CommitButtonText}" Command="{Binding CommitCommand}"
                             Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="CommitButton" />
                     <Button DockPanel.Dock="Right" Content="Discard" Command="{Binding DiscardCommand}" Margin="0,0,12,0"
@@ -156,11 +159,20 @@
                               ToolTip="Flagged duplicates (already in the database, repeated in the file, possible duplicates) are imported unless this is ticked"
                               AutomationProperties.AutomationId="SkipFlaggedCheckBox">
                         <TextBlock>
-                            <Run Text="Skip flagged duplicates (" /><Run Text="{Binding FlaggedImportCount, Mode=OneWay, StringFormat=N0}" /><Run Text=")" />
+                            <Run Text="Skip flagged (" /><Run Text="{Binding FlaggedImportCount, Mode=OneWay, StringFormat=N0}" /><Run Text=")" />
                         </TextBlock>
                     </CheckBox>
 
-                    <!-- Left side: the export of the Invalid tab (button, then progress while it runs). -->
+                    <!-- Left side: paging of the open tab. -->
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" DataContext="{Binding SelectedTab}">
+                        <Button Content="‹ Previous" Command="{Binding PreviousPageCommand}" Style="{StaticResource PagerButton}" />
+                        <Button Content="Next ›" Command="{Binding NextPageCommand}" Style="{StaticResource PagerButton}" Margin="6,0,0,0" />
+                        <TextBlock Text="{Binding PageText}" VerticalAlignment="Center" Margin="12,0,16,0" FontSize="11.5"
+                                   FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource MutedBrush}"
+                                   AutomationProperties.AutomationId="PageText" />
+                    </StackPanel>
+
+                    <!-- The export of the Invalid tab (button, then progress while it runs). -->
                     <Button DockPanel.Dock="Left" Content="Export invalid rows..." Command="{Binding ExportInvalidCommand}"
                             Visibility="{Binding IsInvalidTabSelected, Converter={StaticResource BoolToVis}}"
                             Style="{StaticResource DangerButton}" AutomationProperties.AutomationId="ExportInvalidButton" />

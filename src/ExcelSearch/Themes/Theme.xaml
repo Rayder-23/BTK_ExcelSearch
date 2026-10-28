@@ -368,7 +368,7 @@
         <Setter Property="BorderBrush" Value="#3A4862" />
         <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="ToolTip" Value="Click to sort the rows on this page" />
+        <Setter Property="ToolTip" Value="Click to sort all the rows of this tab" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="DataGridColumnHeader">
@@ -403,6 +403,12 @@
                             <Setter TargetName="DownTri" Property="Fill" Value="#35C98A" />
                             <Setter TargetName="DownTri" Property="Opacity" Value="1" />
                             <Setter TargetName="UpTri" Property="Opacity" Value="0.15" />
+                        </Trigger>
+                        <!-- A column that cannot be sorted (see UnsortableColumnHeader): no marker, no hand cursor. -->
+                        <Trigger Property="Tag" Value="NoSort">
+                            <Setter TargetName="SortMarker" Property="Visibility" Value="Collapsed" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                            <Setter Property="ToolTip" Value="{x:Null}" />
                         </Trigger>
                         <!-- The empty filler header at the far right is not a column: no marker, no hand cursor. -->
                         <Trigger Property="Content" Value="{x:Null}">
@@ -631,6 +637,11 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <!-- Header of a column that has no server-side sort (e.g. the result of comparing with the database). -->
+    <Style x:Key="UnsortableColumnHeader" TargetType="DataGridColumnHeader" BasedOn="{StaticResource LedgerColumnHeader}">
+        <Setter Property="Tag" Value="NoSort" />
     </Style>
 
     <!-- Sort hint on the Query grid: the sort runs on the server over the whole result, not just the visible page. -->

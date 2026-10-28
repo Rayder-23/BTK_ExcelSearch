@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -19,23 +20,60 @@ public partial class StatusTabView : UserControl
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         RowsGrid.PreviewMouseLeftButtonDown += OnGridMouseDown;
+        RowsGrid.Sorting += OnSorting;
     }
 
     private StatusTabViewModel? _tab;
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (_tab is not null) _tab.Rows.CollectionChanged -= OnRowsChanged;
+        if (_tab is not null)
+        {
+            _tab.Rows.CollectionChanged -= OnRowsChanged;
+            _tab.PropertyChanged -= OnTabChanged;
+        }
         _tab = e.NewValue as StatusTabViewModel;
-        if (_tab is not null) _tab.Rows.CollectionChanged += OnRowsChanged;
+        if (_tab is not null)
+        {
+            _tab.Rows.CollectionChanged += OnRowsChanged;
+            _tab.PropertyChanged += OnTabChanged;
+        }
         BuildColumns(_tab);
     }
 
     /// <summary>A new page replaces the rows (the collection is cleared first): start it at the top.</summary>
     private void OnRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
-            Dispatcher.BeginInvoke(() => GridScroll.ToTop(RowsGrid), System.Windows.Threading.DispatcherPriority.Loaded);
+        if (e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Reset) return;
+        Dispatcher.BeginInvoke(() => GridScroll.ToTop(RowsGrid), System.Windows.Threading.DispatcherPriority.Loaded);
+        // The grid forgets its header arrows whenever its rows are replaced: put the arrow back once it has finished.
+        Dispatcher.BeginInvoke(ShowSortArrow, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnTabChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(StatusTabViewModel.Sort))
+            Dispatcher.BeginInvoke(ShowSortArrow, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>A header was clicked: let the server sort the whole status instead of the grid sorting the page.</summary>
+    private void OnSorting(object? sender, DataGridSortingEventArgs e)
+    {
+        e.Handled = true;
+        _tab?.SortBy(e.Column.SortMemberPath);
+    }
+
+    /// <summary>The arrow in the header template follows DataGridColumn.SortDirection; set it on the active column only.</summary>
+    private void ShowSortArrow()
+    {
+        if (_tab is null) return;
+        var active = _tab.Sort.Column.ToString();
+        foreach (var column in RowsGrid.Columns)
+        {
+            column.SortDirection = column.SortMemberPath == active
+                ? (_tab.Sort.Descending ? ListSortDirection.Descending : ListSortDirection.Ascending)
+                : null;
+        }
     }
 
     /// <summary>
@@ -72,35 +110,51 @@ public partial class StatusTabView : UserControl
 
         foreach (var c in tab.Columns)
         {
+            DataGridColumn column;
             if (c.Kind == ColumnKind.Overwrite)
             {
                 // A template column (not DataGridCheckBoxColumn) so one click toggles even though the grid is read-only.
-                RowsGrid.Columns.Add(new DataGridTemplateColumn
+                column = new DataGridTemplateColumn
                 {
                     Header = c.Header,
                     Width = new DataGridLength(c.Width),
                     CellTemplate = (DataTemplate)FindResource("OverwriteCell"),
-                    SortMemberPath = c.Path,
-                });
-                continue;
+                };
+            }
+            else
+            {
+                var styleKey = c.Kind switch
+                {
+                    ColumnKind.Mono => "CellMono",
+                    ColumnKind.Number => "CellNumber",
+                    ColumnKind.Error => "CellError",
+                    _ => "CellText",
+                };
+                column = new DataGridTextColumn
+                {
+                    Header = c.Header,
+                    Binding = new Binding(c.Path) { StringFormat = c.Format },
+                    Width = c.Width > 0 ? new DataGridLength(c.Width) : DataGridLength.Auto,
+                    ElementStyle = (Style)FindResource(styleKey),
+                };
             }
 
-            var styleKey = c.Kind switch
-            {
-                ColumnKind.Mono => "CellMono",
-                ColumnKind.Number => "CellNumber",
-                ColumnKind.Error => "CellError",
-                _ => "CellText",
-            };
-
-            var column = new DataGridTextColumn
-            {
-                Header = c.Header,
-                Binding = new Binding(c.Path) { StringFormat = c.Format },
-                Width = c.Width > 0 ? new DataGridLength(c.Width) : DataGridLength.Auto,
-                ElementStyle = (Style)FindResource(styleKey),
-            };
+            // The name of the whitelisted sort column; the ViewModel rejects anything that is not in the list.
+            column.SortMemberPath = c.Sort?.ToString() ?? "";
+            column.CanUserSort = c.Sort is not null;
+            if (c.Sort is null) column.HeaderStyle = (Style)FindResource("UnsortableColumnHeader");
             RowsGrid.Columns.Add(column);
+
+            // The "Columns" picker ticks/unticks this choice; show or hide the matching grid column.
+            var choice = tab.ColumnChoices.FirstOrDefault(x => x.Column == c);
+            if (choice is null) continue;
+            column.Visibility = choice.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+            choice.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(GridColumnChoice.IsVisible))
+                    column.Visibility = choice.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+            };
         }
+        ShowSortArrow();
     }
 }

@@ -26,9 +26,12 @@ internal sealed class FakeImportPreviewService : IImportPreviewService
         return OnStage(path, ct);
     }
 
-    public Task<PagedRows> GetPageAsync(int batchId, RowStatus status, int pageNumber, int pageSize, CancellationToken ct = default)
+    /// <summary>The sort of every page request, in order.</summary>
+    public List<StagedSort> Sorts { get; } = new();
+
+    public Task<PagedRows> GetPageAsync(int batchId, RowStatus status, int pageNumber, int pageSize, StagedSort sort = default, CancellationToken ct = default)
     {
-        lock (PageRequests) PageRequests.Add((batchId, status, pageNumber, pageSize));
+        lock (PageRequests) { PageRequests.Add((batchId, status, pageNumber, pageSize)); Sorts.Add(sort); }
         var rows = new[] { new StagedRow { ExcelRowNumber = pageNumber, Status = status } };
         return Task.FromResult(new PagedRows(rows, Counts.GetValueOrDefault(status)));
     }
@@ -41,9 +44,9 @@ internal sealed class FakeImportPreviewService : IImportPreviewService
         new StagedRow { ExcelRowNumber = n, Status = RowStatus.Conflict, PayOrderNo = "PO", TxnRefSeqNo = "T" },
         new[] { new FieldChange("Debit", "1.00", "2.00", IsAmount: true) });
 
-    public Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, CancellationToken ct = default)
+    public Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, StagedSort sort = default, CancellationToken ct = default)
     {
-        lock (PageRequests) PageRequests.Add((batchId, RowStatus.Conflict, pageNumber, pageSize));
+        lock (PageRequests) { PageRequests.Add((batchId, RowStatus.Conflict, pageNumber, pageSize)); Sorts.Add(sort); }
         return Task.FromResult(new PagedConflicts(new[] { ConflictFor(pageNumber) }, Counts.GetValueOrDefault(RowStatus.Conflict)));
     }
 
@@ -489,6 +492,50 @@ public class ImportViewModelTests
         Assert.True(conflicts.ShowsDetails);
         Assert.Contains("What differs", conflicts.Columns.Select(c => c.Header));
         Assert.Contains("differ", conflicts.Hint, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- columns picker and server-side sorting ----------------------------------------------------------
+
+    [Fact]
+    public async Task Preview_tabs_offer_every_field_in_the_picker_show_the_txn_ref_by_default_and_sort_every_data_column()
+    {
+        var vm = await StagedAsync(@new: 3, conflict: 5);
+        var newTab = vm.Tabs.Single(t => t.Status == RowStatus.New);
+        var conflicts = vm.Tabs.Single(t => t.Status == RowStatus.Conflict);
+
+        Assert.Equal(30, newTab.ColumnChoices.Count);                     // all 30 staged fields can be shown
+        Assert.True(newTab.ColumnChoices.Single(c => c.Header == "Txn ref").IsVisible);
+        Assert.False(newTab.ColumnChoices.Single(c => c.Header == "Narration 5").IsVisible);
+        Assert.All(newTab.Columns, c => Assert.NotNull(c.Sort));         // every column of an ordinary tab sorts
+        Assert.Equal(new[] { "Pay order no", "Txn ref" }, conflicts.ColumnChoices.Where(c => c.IsVisible).Select(c => c.Header));
+        Assert.Equal(new[] { "Changes", "What differs" }, conflicts.Columns.Where(c => c.Sort is null).Select(c => c.Header));
+
+        newTab.ShowAllColumnsCommand.Execute(null);
+        Assert.All(newTab.ColumnChoices, c => Assert.True(c.IsVisible));
+        newTab.ResetColumnsCommand.Execute(null);
+        Assert.False(newTab.ColumnChoices.Single(c => c.Header == "Narration 5").IsVisible);
+    }
+
+    [Fact]
+    public async Task Sorting_by_a_header_reloads_page_1_from_the_server_and_a_second_click_flips_the_direction()
+    {
+        var vm = await StagedAsync(@new: 250, conflict: 0);
+        var tab = vm.Tabs.Single(t => t.Status == RowStatus.New);
+        vm.SelectedTab = tab;
+        await WaitForAsync(() => tab.IsLoaded);
+        await tab.NextPageCommand.ExecuteAsync(null);
+        Assert.Equal(2, tab.PageNumber);
+        _service.Sorts.Clear();
+
+        tab.SortBy(nameof(StagedColumn.BankName));
+        await WaitForAsync(() => !tab.IsLoading && tab.PageNumber == 1);
+        tab.SortBy(nameof(StagedColumn.BankName));
+        await WaitForAsync(() => _service.Sorts.Count == 2 && !tab.IsLoading);
+        tab.SortBy("NotAColumn");                                          // ignored
+        tab.SortBy(nameof(StagedColumn.Overwrite));                        // not a column of this tab: ignored
+
+        Assert.Equal(new[] { new StagedSort(StagedColumn.BankName, false), new StagedSort(StagedColumn.BankName, true) }, _service.Sorts);
+        Assert.Equal(new StagedSort(StagedColumn.BankName, true), tab.Sort);
     }
 
     // ---- feature 1: conflict overwrite choices -----------------------------------------------------------

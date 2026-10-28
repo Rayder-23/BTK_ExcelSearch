@@ -82,9 +82,9 @@ public interface IStagingStore : IInvalidRowSource
     /// <summary>Row count per status; every status is present, with 0 when there are none.</summary>
     Task<IReadOnlyDictionary<RowStatus, int>> GetCountsAsync(int batchId, CancellationToken ct = default);
 
-    /// <summary>A page (1-based) of the batch's rows with the given status, ordered by ExcelRowNumber.</summary>
+    /// <summary>A page (1-based) of the batch's rows with the given status, ordered by <paramref name="sort"/> (default: ExcelRowNumber).</summary>
     Task<PagedRows> GetPageAsync(int batchId, RowStatus status, int pageNumber, int pageSize,
-        CancellationToken ct = default);
+        StagedSort sort = default, CancellationToken ct = default);
 
     /// <summary>
     /// Marks a 'Staged' batch 'Discarded' and only then deletes its staging rows (in chunks). A batch that is
@@ -118,7 +118,8 @@ public interface IStagingStore : IInvalidRowSource
     /// A page (1-based) of Conflict rows, each with the existing Transactions row compared column by column,
     /// so the screen can show exactly what differs.
     /// </summary>
-    Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, CancellationToken ct = default);
+    Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize, StagedSort sort = default,
+        CancellationToken ct = default);
 
     /// <summary>How many Conflict rows the batch has and how many are set to overwrite, read from the database.</summary>
     Task<ConflictCounts> GetConflictCountsAsync(int batchId, CancellationToken ct = default);

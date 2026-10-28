@@ -40,6 +40,19 @@ public sealed partial class SqliteStagingStore : StagingStoreBase
         _options = options ?? new StagingStoreOptions();
     }
 
+    private static readonly System.Reflection.MethodInfo CollateMethod = typeof(RelationalDbFunctionsExtensions).GetMethods()
+        .Single(m => m.Name == nameof(RelationalDbFunctionsExtensions.Collate)).MakeGenericMethod(typeof(string));
+
+    /// <summary>Preview sorting on a text column ignores case ("alice" next to "Alice"), as the SQL Server collation does.</summary>
+    protected override IOrderedQueryable<Entities.ImportStaging> ByText(IQueryable<Entities.ImportStaging> q,
+        System.Linq.Expressions.Expression<Func<Entities.ImportStaging, string?>> key, bool descending)
+    {
+        var collated = System.Linq.Expressions.Expression.Lambda<Func<Entities.ImportStaging, string?>>(
+            System.Linq.Expressions.Expression.Call(CollateMethod, System.Linq.Expressions.Expression.Constant(EF.Functions), key.Body,
+                System.Linq.Expressions.Expression.Constant("NOCASE")), key.Parameters);
+        return descending ? q.OrderByDescending(collated) : q.OrderBy(collated);
+    }
+
     // ---- load ------------------------------------------------------------------------------------------------
 
     public override Task<LoadResult> LoadRowsAsync(int batchId, IEnumerable<ImportRow> rows, IProgress<int>? progress,

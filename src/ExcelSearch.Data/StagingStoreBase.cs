@@ -64,7 +64,7 @@ public abstract class StagingStoreBase : IStagingStore
     }
 
     public async Task<PagedRows> GetPageAsync(int batchId, RowStatus status, int pageNumber, int pageSize,
-        CancellationToken ct = default)
+        StagedSort sort = default, CancellationToken ct = default)
     {
         if (pageNumber < 1) throw new ArgumentOutOfRangeException(nameof(pageNumber), "Pages are 1-based.");
         if (pageSize < 1) throw new ArgumentOutOfRangeException(nameof(pageSize));
@@ -74,11 +74,68 @@ public abstract class StagingStoreBase : IStagingStore
             .Where(s => s.ImportBatchId == batchId && s.Status == (byte)status);
 
         var total = await query.CountAsync(ct).ConfigureAwait(false);
-        var entities = await query.OrderBy(s => s.ExcelRowNumber)
+        var entities = await Order(query, sort)
             .Skip((pageNumber - 1) * pageSize).Take(pageSize)
             .ToListAsync(ct).ConfigureAwait(false);
 
         return new PagedRows(entities.Select(ToStagedRow).ToList(), total);
+    }
+
+    /// <summary>ORDER BY on a text column; SQLite overrides this to sort without regard to case, as SQL Server's collation does.</summary>
+    protected virtual IOrderedQueryable<ImportStaging> ByText(IQueryable<ImportStaging> q,
+        System.Linq.Expressions.Expression<Func<ImportStaging, string?>> key, bool descending) =>
+        descending ? q.OrderByDescending(key) : q.OrderBy(key);
+
+    private static IOrderedQueryable<ImportStaging> By<TKey>(IQueryable<ImportStaging> q,
+        System.Linq.Expressions.Expression<Func<ImportStaging, TKey>> key, bool descending) =>
+        descending ? q.OrderByDescending(key) : q.OrderBy(key);
+
+    /// <summary>
+    /// The sort whitelist: each allowed column maps to a fixed expression; nothing from the caller reaches the SQL text.
+    /// Ties are broken by the Excel row number (always ascending), so the order is total and paging is stable.
+    /// </summary>
+    private IOrderedQueryable<ImportStaging> Order(IQueryable<ImportStaging> q, StagedSort sort)
+    {
+        var d = sort.Descending;
+        var o = sort.Column switch
+        {
+            StagedColumn.ExcelRowNumber => By(q, s => s.ExcelRowNumber, d),
+            StagedColumn.Overwrite => By(q, s => s.Overwrite, d),
+            StagedColumn.ErrorText => ByText(q, s => s.ErrorText, d),
+            StagedColumn.MatchReason => By(q, s => s.MatchReason, d),
+            StagedColumn.ValueDate => By(q, s => s.ValueDate, d),
+            StagedColumn.PayOrderNo => ByText(q, s => s.PayOrderNo, d),
+            StagedColumn.TxnRefSeqNo => ByText(q, s => s.TxnRefSeqNo, d),
+            StagedColumn.CustomerName => ByText(q, s => s.CustomerName, d),
+            StagedColumn.Cnic => ByText(q, s => s.Cnic, d),
+            StagedColumn.ApplicationNo => ByText(q, s => s.ApplicationNo, d),
+            StagedColumn.RegNo => ByText(q, s => s.RegNo, d),
+            StagedColumn.ChallanNo => ByText(q, s => s.ChallanNo, d),
+            StagedColumn.ChequeInstNo => ByText(q, s => s.ChequeInstNo, d),
+            StagedColumn.BankName => ByText(q, s => s.BankName, d),
+            StagedColumn.AccountNo => ByText(q, s => s.AccountNo, d),
+            StagedColumn.Project => ByText(q, s => s.Project, d),
+            StagedColumn.DealerName => ByText(q, s => s.DealerName, d),
+            StagedColumn.BranchName => ByText(q, s => s.BranchName, d),
+            StagedColumn.DataSource => ByText(q, s => s.DataSource, d),
+            StagedColumn.Debit => By(q, s => s.Debit, d),
+            StagedColumn.Credit => By(q, s => s.Credit, d),
+            StagedColumn.DownPaymentAmount => By(q, s => s.DownPaymentAmount, d),
+            StagedColumn.RunningBalance => By(q, s => s.RunningBalance, d),
+            StagedColumn.SlipNo => ByText(q, s => s.SlipNo, d),
+            StagedColumn.Discount => By(q, s => s.Discount, d),
+            StagedColumn.BranchCode => ByText(q, s => s.BranchCode, d),
+            StagedColumn.PlotNo => ByText(q, s => s.PlotNo, d),
+            StagedColumn.StreetNo => ByText(q, s => s.StreetNo, d),
+            StagedColumn.Narration1 => ByText(q, s => s.Narration1, d),
+            StagedColumn.Narration2 => ByText(q, s => s.Narration2, d),
+            StagedColumn.Narration3 => ByText(q, s => s.Narration3, d),
+            StagedColumn.Narration4 => ByText(q, s => s.Narration4, d),
+            StagedColumn.Narration5 => ByText(q, s => s.Narration5, d),
+            StagedColumn.NarrationCnic => ByText(q, s => s.NarrationCnic, d),
+            _ => throw new ArgumentOutOfRangeException(nameof(sort), sort.Column, "Not a sortable column."),
+        };
+        return sort.Column == StagedColumn.ExcelRowNumber ? o : o.ThenBy(s => s.ExcelRowNumber);
     }
 
     public async Task<int> SetConflictOverwriteAsync(int batchId, bool overwrite,
@@ -97,10 +154,10 @@ public abstract class StagingStoreBase : IStagingStore
     }
 
     public async Task<PagedConflicts> GetConflictPageAsync(int batchId, int pageNumber, int pageSize,
-        CancellationToken ct = default)
+        StagedSort sort = default, CancellationToken ct = default)
     {
         // The staged side is the same paged query the other tabs use.
-        var page = await GetPageAsync(batchId, RowStatus.Conflict, pageNumber, pageSize, ct).ConfigureAwait(false);
+        var page = await GetPageAsync(batchId, RowStatus.Conflict, pageNumber, pageSize, sort, ct).ConfigureAwait(false);
         if (page.Rows.Count == 0) return new PagedConflicts(Array.Empty<ConflictRow>(), page.Total);
 
         // One query for the whole page: by PayOrderNo (an index-friendly IN list of at most pageSize keys),

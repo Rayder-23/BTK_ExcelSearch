@@ -207,6 +207,28 @@ public abstract class StagingStoreContract
     }
 
     [SkippableFact]
+    public async Task GetPage_sorts_the_whole_status_ignoring_case_and_pages_the_sorted_order()
+    {
+        await using var env = NewEnv();
+        // Banks in mixed case on rows 2..7, credits 10..60: the sort must run over every row, not just the page shown.
+        var banks = new[] { "hbl", "UBL", "Alfalah", "hbl", "ABL", "ubl" };
+        var rows = banks.Select((bank, i) => CashRow(i + 2, bank, "A1", env.Key("br"), $"S{i}", (i + 1) * 10m)).ToList();
+        var id = await env.StageAsync(rows);
+
+        var byBank = await env.Store.GetPageAsync(id, RowStatus.New, 1, 10, new StagedSort(StagedColumn.BankName, false));
+        Assert.Equal(new[] { "ABL", "Alfalah", "hbl", "hbl", "UBL", "ubl" }, byBank.Rows.Select(r => r.BankName));
+        Assert.Equal(new[] { 2, 5 }, byBank.Rows.Where(r => r.BankName == "hbl").Select(r => r.ExcelRowNumber));   // ties: file order
+
+        var byCreditDesc = await env.Store.GetPageAsync(id, RowStatus.New, 1, 2, new StagedSort(StagedColumn.Credit, true));
+        Assert.Equal(new[] { 60m, 50m }, byCreditDesc.Rows.Select(r => r.Credit!.Value));
+        var page2 = await env.Store.GetPageAsync(id, RowStatus.New, 2, 2, new StagedSort(StagedColumn.Credit, true));
+        Assert.Equal(new[] { 40m, 30m }, page2.Rows.Select(r => r.Credit!.Value));
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            env.Store.GetPageAsync(id, RowStatus.New, 1, 10, new StagedSort((StagedColumn)999, false)));
+    }
+
+    [SkippableFact]
     public async Task Discard_removes_only_its_own_batch_and_leaves_Transactions_alone()
     {
         await using var env = NewEnv();
