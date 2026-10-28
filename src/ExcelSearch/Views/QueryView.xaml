@@ -45,7 +45,7 @@
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="White" />
             <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="Margin" Value="0,0,22,0" />
+            <Setter Property="Margin" Value="0,0,14,0" />
         </Style>
     </UserControl.Resources>
 
@@ -423,12 +423,11 @@
             </Border>
 
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Content="‹ Previous" Command="{Binding PreviousPageCommand}" Style="{StaticResource PagerButton}" AutomationProperties.AutomationId="PreviousPageButton" />
-                <TextBlock Text="{Binding PageText}" VerticalAlignment="Center" Margin="10,0" FontSize="12" FontFamily="{StaticResource MonoFont}"
+                <Button Content="‹ Prev" Command="{Binding PreviousPageCommand}" Style="{StaticResource PagerButton}" ToolTip="Previous page" AutomationProperties.AutomationId="PreviousPageButton" />
+                <TextBlock Text="{Binding PageText}" VerticalAlignment="Center" Margin="8,0" FontSize="12" FontFamily="{StaticResource MonoFont}"
                            Foreground="{StaticResource MutedBrush}" AutomationProperties.AutomationId="PageText" />
-                <Button Content="Next ›" Command="{Binding NextPageCommand}" Style="{StaticResource PagerButton}" AutomationProperties.AutomationId="NextPageButton" />
-                <TextBlock Text="Rows" VerticalAlignment="Center" Margin="14,0,6,0" FontSize="12" Foreground="{StaticResource MutedBrush}" />
-                <ComboBox ItemsSource="{x:Static views:QueryView.PageSizes}" SelectedItem="{Binding SelectedPageSize, Mode=TwoWay}" Width="60"
+                <Button Content="Next ›" Command="{Binding NextPageCommand}" Style="{StaticResource PagerButton}" ToolTip="Next page" AutomationProperties.AutomationId="NextPageButton" />
+                                <ComboBox ItemsSource="{x:Static views:QueryView.PageSizes}" SelectedItem="{Binding SelectedPageSize, Mode=TwoWay}" Width="60" Margin="10,0,0,0"
                           FontSize="12" VerticalContentAlignment="Center" ToolTip="Rows per page" AutomationProperties.AutomationId="PageSizeBox" />
             </StackPanel>
         </Grid>

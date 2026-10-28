@@ -879,12 +879,13 @@ public class QueryViewModelTests
         var shown = vm.ColumnChoices.Where(c => c.IsVisible).Select(c => c.Header).ToArray();
         Assert.Equal(new[]
         {
-            "Value date", "Slip no", "Customer", "CNIC", "Bank", "Account no", "Project", "Debit", "Credit", "Narration 1", "Narration 2",
+            "Value date", "Slip no", "Pay order no", "Txn ref / seq", "Customer", "CNIC", "Bank", "Account no", "Project", "Branch",
+            "Debit", "Credit", "Branch code", "Narration 1", "Narration 2",
         }, shown);
-        Assert.Equal(19, vm.ColumnChoices.Count(c => !c.IsVisible));  // pay order, txn ref, application no, dealer, down payment, reg no, ... (most statement rows have none of them)
+        Assert.Equal(15, vm.ColumnChoices.Count(c => !c.IsVisible));  // application no, dealer, down payment, reg no, ...
 
-        vm.ColumnChoices.Single(c => c.Header == "Pay order no").IsVisible = true;
-        Assert.Contains("Pay order no", vm.ColumnChoices.Where(c => c.IsVisible).Select(c => c.Header));
+        vm.ColumnChoices.Single(c => c.Header == "Application no").IsVisible = true;
+        Assert.Contains("Application no", vm.ColumnChoices.Where(c => c.IsVisible).Select(c => c.Header));
     }
 
     // ---- export: selected columns (default) or all columns -----------------------------------------------
@@ -898,14 +899,14 @@ public class QueryViewModelTests
         Assert.Equal(QueryViewModel.SelectedColumnsScope, vm.ExportScope);
 
         vm.ColumnChoices.Single(c => c.Header == "Project").IsVisible = false;       // unticked in the picker
-        vm.ColumnChoices.Single(c => c.Header == "Pay order no").IsVisible = true;   // a normally hidden field, ticked
+        vm.ColumnChoices.Single(c => c.Header == "Application no").IsVisible = true; // a normally hidden field, ticked
 
         await vm.ExportCommand.ExecuteAsync(null);
 
         Assert.Equal(new[]
         {
-            "ValueDate", "SlipNo", "PayOrderNo", "CustomerName", "Cnic", "BankName", "AccountNo",
-            "Debit", "Credit", "Narration1", "Narration2",
+            "ValueDate", "SlipNo", "PayOrderNo", "TxnRefSeqNo", "CustomerName", "Cnic", "ApplicationNo", "BankName", "AccountNo",
+            "BranchName", "Debit", "Credit", "BranchCode", "Narration1", "Narration2",
         }, svc.ExportColumnCalls.Single());
     }
 

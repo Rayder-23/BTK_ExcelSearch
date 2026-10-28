@@ -48,7 +48,7 @@ All of it, as built (the approved plan is in the appendix; where the build diffe
 **Query**
 - `TransactionKey` is the `Id`; the sort tie-break, the export keyset and the detail lookup use `Id`. `TransactionRecord` has `Id`, nullable `PayOrderNo` / `TxnRefSeqNo`, `SlipNo`, `NarrationCnic`.
 - New "Slip no" filter; the CNIC filter matches `Cnic` OR `NarrationCnic`; `SlipNo` is sortable. Export has 30 fields.
-- Default columns: Value date, Slip no, Customer, CNIC, Bank, Account no, Project, Debit, Credit, Narration 1, Narration 2. Pay order no, Txn ref, Application no, Dealer and Down payment are hidden until ticked in the Columns picker (a change from before, because most statement rows have none of them).
+- Default columns: Value date, Slip no, Pay order no, Txn ref, Customer, CNIC, Bank, Account no, Project, Branch, Debit, Credit, Branch code, Narration 1, Narration 2. Application no, Dealer, Down payment and the rest are hidden until ticked in the Columns picker.
 
 **Import screen**
 - Sixth tab "Possible duplicates". Cards say "flagged" instead of "skipped". A "Skip flagged duplicates (N)" checkbox appears when N > 0 key-less flagged rows exist (default off). The button reads "Import 103 new rows (+46 flagged duplicates)". The Done panel adds "Flagged duplicates imported" and "Possible duplicates (skipped)". Grid columns on all tabs but Conflicts: Row, Value date, Slip no, Customer, Debit, Credit, Bank, Narration 1.

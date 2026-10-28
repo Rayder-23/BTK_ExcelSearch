@@ -161,9 +161,8 @@ public sealed partial class QueryViewModel : ObservableObject
     {
         new("Value date", nameof(TransactionRecord.ValueDate), TransactionColumn.ValueDate, ColumnKind.Mono, "dd/MM/yyyy", 108),
         new("Slip no", nameof(TransactionRecord.SlipNo), TransactionColumn.SlipNo, ColumnKind.Mono, null, 100),
-        // Bank statements have no pay order no / txn ref on most rows, so these two are hidden until ticked in the Columns picker.
-        new("Pay order no", nameof(TransactionRecord.PayOrderNo), TransactionColumn.PayOrderNo, ColumnKind.Mono, null, 150, false),
-        new("Txn ref / seq", nameof(TransactionRecord.TxnRefSeqNo), TransactionColumn.TxnRefSeqNo, ColumnKind.Mono, null, 120, false),
+        new("Pay order no", nameof(TransactionRecord.PayOrderNo), TransactionColumn.PayOrderNo, ColumnKind.Mono, null, 150),
+        new("Txn ref / seq", nameof(TransactionRecord.TxnRefSeqNo), TransactionColumn.TxnRefSeqNo, ColumnKind.Mono, null, 120),
         new("Customer", nameof(TransactionRecord.CustomerName), TransactionColumn.CustomerName, ColumnKind.Text, null, 220),
         new("CNIC", nameof(TransactionRecord.Cnic), TransactionColumn.Cnic, ColumnKind.Mono, null, 130),
         new("Application no", nameof(TransactionRecord.ApplicationNo), TransactionColumn.ApplicationNo, ColumnKind.Mono, null, 130, false),
@@ -172,7 +171,7 @@ public sealed partial class QueryViewModel : ObservableObject
         new("Account no", nameof(TransactionRecord.AccountNo), TransactionColumn.AccountNo, ColumnKind.Mono, null, 140),
         new("Project", nameof(TransactionRecord.Project), TransactionColumn.Project, ColumnKind.Text, null, 140),
         new("Dealer", nameof(TransactionRecord.DealerName), TransactionColumn.DealerName, ColumnKind.Text, null, 150, false),
-        new("Branch", nameof(TransactionRecord.BranchName), TransactionColumn.BranchName, ColumnKind.Text, null, 140, false),
+        new("Branch", nameof(TransactionRecord.BranchName), TransactionColumn.BranchName, ColumnKind.Text, null, 140),
         new("Debit", nameof(TransactionRecord.Debit), TransactionColumn.Debit, ColumnKind.Number, "N2", 118),
         new("Credit", nameof(TransactionRecord.Credit), TransactionColumn.Credit, ColumnKind.Number, "N2", 118),
         new("Down payment", nameof(TransactionRecord.DownPaymentAmount), TransactionColumn.DownPaymentAmount, ColumnKind.Number, "N2", 128, false),
@@ -184,7 +183,7 @@ public sealed partial class QueryViewModel : ObservableObject
         // sorting by a narration has no index and reads the whole result, so on hundreds of thousands of rows it takes a moment.
         new("Running balance", nameof(TransactionRecord.RunningBalance), TransactionColumn.RunningBalance, ColumnKind.Number, "N2", 130, false),
         new("Discount", nameof(TransactionRecord.Discount), TransactionColumn.Discount, ColumnKind.Number, "N2", 100, false),
-        new("Branch code", nameof(TransactionRecord.BranchCode), TransactionColumn.BranchCode, ColumnKind.Mono, null, 100, false),
+        new("Branch code", nameof(TransactionRecord.BranchCode), TransactionColumn.BranchCode, ColumnKind.Mono, null, 100),
         new("Plot no", nameof(TransactionRecord.PlotNo), TransactionColumn.PlotNo, ColumnKind.Mono, null, 90, false),
         new("Street no", nameof(TransactionRecord.StreetNo), TransactionColumn.StreetNo, ColumnKind.Mono, null, 90, false),
         new("Narration 1", nameof(TransactionRecord.Narration1), TransactionColumn.Narration1, ColumnKind.Text, null, 240),
